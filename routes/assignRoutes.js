@@ -34,7 +34,7 @@ router.put("/:id", teacherOnly, updateAssignmentSettings);
 router.post(
   "/generate-from-material",
   teacherOnly,
-  upload.single("document"),
+  upload.single("docFile"),
   parseMaterialForQuestions,
 );
 

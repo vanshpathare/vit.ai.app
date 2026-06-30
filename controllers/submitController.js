@@ -171,7 +171,7 @@ import { gradingQueue } from "../utils/gradingQueue.js";
 
 // 1. EXECUTE AI EVALUATION ENGINE (HANDLES BOTH STATIC TEXT & DYNAMIC CONVERSATIONAL SPEECH)
 export const submitAssignment = async (req, res) => {
-  const { submissionId, responseText, tabSwitchCount } = req.body;
+  const { submissionId, responses, tabSwitchCount } = req.body;
 
   try {
     const submission =
@@ -213,7 +213,7 @@ export const submitAssignment = async (req, res) => {
     // Guardrail 3: Text-Only Input Validation Check
     if (
       assignment.modality === "Text-Only" &&
-      (!responseText || responseText.trim() === "")
+      (!responses || !Array.isArray(responses) || responses.length === 0)
     ) {
       return res.status(400).json({
         message:
@@ -236,10 +236,21 @@ export const submitAssignment = async (req, res) => {
       result = await gradingQueue.enqueue(async () => {
         // 📝 MODE A: TEXT-ONLY STATIC EVALUATION FLOW
         if (assignment.modality === "Text-Only") {
-          submission.responseText = responseText;
+          submission.responses = responses;
+
+          // Build a perfectly compiled exam script for the Gemini prompt
+          let structuredExamScript = "";
+          responses.forEach((item, index) => {
+            structuredExamScript += `
+              --- QUESTION #${index + 1} ---
+              PROMPT ASKED: "${item.questionText}"
+              STUDENT ANSWER: "${item.answerText}"
+            \n`;
+          });
+
           return await evaluateWithGemini(
-            submission.assignedQuestion,
-            responseText,
+            structuredExamScript,
+            null, // responseInput buffer set to null since text is embedded in the script
             criteriaMap,
             assignment.aiNotes,
           );

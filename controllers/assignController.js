@@ -2,6 +2,11 @@ import Assignment from "../models/Assignment.js";
 import Submission from "../models/Submission.js";
 import Classroom from "../models/Classroom.js";
 import { generateQuestionsFromMaterial } from "../services/geminiService.js";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse");
+import mammoth from "mammoth";
+import PDFParser from "pdf2json";
 
 // 1. CREATE AND BULK-DISTRIBUTE ASSIGNMENT (Teacher Only - Push Architecture)
 export const createAssignment = async (req, res) => {
@@ -9,18 +14,22 @@ export const createAssignment = async (req, res) => {
     classId,
     title,
     questionPool,
+    questionsPerStudent,
     modality,
     totalMarks,
     evaluationCriteria,
     aiNotes,
     dueDate,
+    distributionType,
+    isResultPublished,
+    allowMultipleSubmissions,
   } = req.body;
 
   try {
     // 🔒 OWNERSHIP GUARDRAIL: Confirm classroom belongs to the teacher making the request
     const classroom = await Classroom.findOne({
       _id: classId,
-      teacherId: req.user._id, // Matches the authenticated teacher's ID
+      teacherId: req.user._id,
     });
 
     if (!classroom) {
@@ -41,39 +50,58 @@ export const createAssignment = async (req, res) => {
         .json({ message: "Assignment requires a valid question pool array." });
     }
 
+    const countPerStudent = parseInt(questionsPerStudent) || 1;
+
     // A. Provision and save the Master Assignment Blueprint
     const assignment = await Assignment.create({
       classId,
       title,
       questionPool,
+      questionsPerStudent: countPerStudent,
       modality,
       totalMarks,
       evaluationCriteria,
       aiNotes,
       dueDate,
+      distributionType: distributionType || "same-for-all",
+      isResultPublished: isResultPublished ?? false,
+      allowMultipleSubmissions: allowMultipleSubmissions ?? false,
     });
 
-    // ⚡ B. AUTOMATED BULK DISTRIBUTION PIPELINE (Push Model)
-    // Instantly generate individual submission slots for all currently enrolled students
+    // ⚡ B. AUTOMATED BULK DISTRIBUTION PIPELINE (Optimized Bulk Push Model)
     if (classroom.studentsEnrolled && classroom.studentsEnrolled.length > 0) {
-      const submissionPromises = classroom.studentsEnrolled.map(
-        async (studentId) => {
-          // Randomize a question from the pool uniquely for this specific student's slot
-          const randomIndex = Math.floor(Math.random() * questionPool.length);
-          const selectedQuestion = questionPool[randomIndex];
+      // Pre-calculate a uniform question IF the teacher chose "same-for-all"
 
-          return Submission.create({
-            assignmentId: assignment._id,
-            studentId: studentId,
-            assignedQuestion: selectedQuestion,
-            status: "pending", // Appears instantly in their "Pending" dashboard section
-            tabSwitchCount: 0,
-          });
-        },
-      );
+      const uniformQuestion = [...questionPool];
 
-      // Execute all database insertion transactions concurrently in parallel
-      await Promise.all(submissionPromises);
+      // Prepare an array of raw document objects in memory
+      const submissionDocs = classroom.studentsEnrolled.map((studentId) => {
+        let assignedQuestionsArray = [];
+
+        if (distributionType === "same-for-all") {
+          assignedQuestionsArray = uniformQuestion; // Everyone gets the exact same question
+        } else {
+          // "random": Shuffle the pool uniquely for this student and slice out the requested amount
+          const shuffledPool = [...questionPool].sort(
+            () => 0.5 - Math.random(),
+          );
+          assignedQuestionsArray = shuffledPool.slice(
+            0,
+            Math.min(countPerStudent, questionPool.length),
+          );
+        }
+
+        return {
+          assignmentId: assignment._id,
+          studentId: studentId,
+          assignedQuestions: assignedQuestionsArray,
+          status: "pending",
+          tabSwitchCount: 0,
+        };
+      });
+
+      // 🏎️ Bulk insert all rows at once! 1 single connection, 1 single trip to MongoDB.
+      await Submission.insertMany(submissionDocs);
     }
 
     res.status(201).json({
@@ -82,6 +110,7 @@ export const createAssignment = async (req, res) => {
       assignment,
     });
   } catch (error) {
+    console.error("❌ Assignment deployment failure:", error);
     res.status(500).json({
       message: "Assignment deployment and broadcast pipeline failed.",
       error: error.message,
@@ -117,14 +146,28 @@ export const initializeOrGetSubmission = async (req, res) => {
           .json({ message: "Target assignment has an empty question pool." });
       }
 
-      // Randomize index calculation (If pool length is 1, index will always be 0)
-      const randomIndex = Math.floor(Math.random() * pool.length);
-      const selectedQuestion = pool[randomIndex];
+      let assignedQuestionsArray = [];
+      const countPerStudent = assignment.questionsPerStudent || 1;
+
+      if (assignment.distributionType === "same-for-all") {
+        // Find an active classmate's row to copy their exact question array setup
+        const classmateSubmission = await Submission.findOne({ assignmentId });
+        assignedQuestionsArray = classmateSubmission
+          ? classmateSubmission.assignedQuestions
+          : [...pool];
+      } else {
+        // Give them a unique randomized subset sliced to the specified quantity limit
+        const shuffledPool = [...pool].sort(() => 0.5 - Math.random());
+        assignedQuestionsArray = shuffledPool.slice(
+          0,
+          Math.min(countPerStudent, pool.length),
+        );
+      }
 
       submission = await Submission.create({
         assignmentId,
         studentId: req.user._id,
-        assignedQuestion: selectedQuestion,
+        assignedQuestions: assignedQuestionsArray,
         status: "pending",
         tabSwitchCount: 0,
       });
@@ -137,7 +180,7 @@ export const initializeOrGetSubmission = async (req, res) => {
     // C. Return unified response payload structure back to the frontend dashboard view
     res.status(200).json({
       submissionId: submission._id,
-      assignedQuestion: submission.assignedQuestion,
+      assignedQuestions: submission.assignedQuestions,
       status: submission.status,
       responseText: submission.responseText,
       modality: assignment.modality,
@@ -232,9 +275,48 @@ export const parseMaterialForQuestions = async (req, res) => {
     }
 
     const questionCount = parseInt(count) || 5;
+    let extractedText = "";
+    const fileExtension = req.file.originalname.split(".").pop().toLowerCase();
 
+    // 🏎️ EXTRACT TEXT BASED ON FILE TYPE
+    if (fileExtension === "pdf" || req.file.mimetype === "application/pdf") {
+      extractedText = await new Promise((resolve, reject) => {
+        const pdfParser = new PDFParser(null, 1); // '1' flag extracts raw text content cleanly
+
+        pdfParser.on("pdfParser_dataError", (errData) =>
+          reject(errData.parserError),
+        );
+        pdfParser.on("pdfParser_dataReady", (pdfData) => {
+          // pdf2json parses lines into URL-encoded format; this decodes it into standard text strings
+          const rawText = pdfParser.getRawTextContent();
+          resolve(decodeURIComponent(rawText));
+        });
+
+        // Load the memory buffer directly
+        pdfParser.parseBuffer(req.file.buffer);
+      });
+    } else if (fileExtension === "docx") {
+      const docResult = await mammoth.extractRawText({
+        buffer: req.file.buffer,
+      });
+      extractedText = docResult.value;
+    } else {
+      // Fallback for standard .txt or .md files
+      extractedText = req.file.buffer.toString("utf-8");
+    }
+
+    // Safety check: Ensure we actually got readable text out of the file
+    if (!extractedText || extractedText.trim().length === 0) {
+      return res.status(400).json({
+        message:
+          "Could not extract text from this document. Ensure it's not a scanned image file.",
+      });
+    }
+
+    // 🧠 PASS THE CLEAN TEXT STRING INTO YOUR AI GENERATOR HELPER
+    // Note: Inside generateQuestionsFromMaterial, make sure you use this text instead of req.file!
     const questionPool = await generateQuestionsFromMaterial(
-      req.file,
+      extractedText, // ◄── Pass the clean text string directly here!
       questionCount,
       dynamicFocus,
     );
@@ -244,6 +326,7 @@ export const parseMaterialForQuestions = async (req, res) => {
       questionPool,
     });
   } catch (error) {
+    console.error("❌ Material parsing engine failure:", error);
     res.status(500).json({
       message: "Material parsing engine failure.",
       error: error.message,

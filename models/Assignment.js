@@ -21,6 +21,11 @@ const assignmentSchema = new mongoose.Schema(
       },
     ],
 
+    questionsPerStudent: {
+      type: Number,
+      default: 1, // Fallback to 1 question if not specified
+    },
+
     modality: {
       type: String,
       enum: ["Text-Only", "Speech-Only"],
@@ -33,6 +38,10 @@ const assignmentSchema = new mongoose.Schema(
     evaluationCriteria: {
       type: Map,
       of: Number,
+      default: function () {
+        // If totalMarks is provided during creation, it uses that; otherwise defaults to 20
+        return new Map([["Overall Performance", this.totalMarks || 20]]);
+      },
       required: true,
     },
     aiNotes: {
@@ -54,6 +63,12 @@ const assignmentSchema = new mongoose.Schema(
     allowMultipleSubmissions: {
       type: Boolean,
       default: false, // Default to safe "Exam Mode" (Only once)
+    },
+
+    distributionType: {
+      type: String,
+      enum: ["random", "same-for-all"],
+      default: "same-for-all", // Safeguards it by defaulting to standard randomized mode
     },
   },
   {

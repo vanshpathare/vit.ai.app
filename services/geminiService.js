@@ -123,19 +123,20 @@ export const evaluateWithGemini = async (
  * @returns {Promise<Array<string>>} Array of cleanly generated question strings
  */
 export const generateQuestionsFromMaterial = async (
-  documentFile,
+  materialText,
   count = 5,
   dynamicFocus = "",
 ) => {
   try {
-    // Extract the raw string from the memory buffer
-    const materialText = documentFile.buffer.toString("utf-8");
-
     const systemInstruction = `
-      You are an expert academic professor. Your job is to thoroughly analyze the attached reference material document text
-      and generate a diverse list of highly targeted test questions. 
-      The questions must be clean, precise, academic, and completely answerable using only the provided context material.
-    `;
+      You are an expert academic professor designing an automated exam or oral viva. 
+  Your job is to thoroughly analyze the provided reference material document text and generate a diverse list of highly targeted test questions. 
+
+  CRITICAL QUESTION PHRASING CONSTRAINTS:
+  1. The questions must be completely answerable using only the provided context material.
+  2. Each question MUST be completely standalone. Do NOT include phrases like "according to the text," "as mentioned in the material," "in the provided context," "based on the given description," or "from the document." 
+  3. The student will NOT see the reference document. Phrase the questions naturally as if they are part of a standard examination paper or a live viva session (e.g., instead of "Based on the text, what is an illumination model?", ask "What is an illumination model and what are its primary components?").
+  4. Ensure the questions are clean, precise, and purely academic.    `;
 
     const userPrompt = `
       Analyze the reference text below:
@@ -199,6 +200,10 @@ export const evaluateConversationTurn = async ({
       CRITICAL INSTRUCTOR DIRECTIVES & LIFECYCLE MANAGEMENT RULES:
       - Read and strictly follow the instructor's rules, topic constraints, and custom instructions provided here: "${aiNotes}".
       - Dynamically determine how many questions to ask, what topics to cover, and when the assessment has reached its logical conclusion based entirely on those Instructor Notes and the flow of the conversation history.
+      - Write all feedback from the perspective of a strict but encouraging human professor or corporate interviewer.
+      - DO NOT use AI-specific or technical machine learning jargon such as "the prompt," "the system," "input response," "token limit," or "LLM constraints."
+      - Instead, refer to the student's work as "your submission," "your response," "the communication context," or "your answer".The tone must remain natural, professional, and entirely human-centric.
+      - Never use escaped characters, system backslashes (\"), or redundant symbols. When quoting errors or parts of the student's submission, wrap the quoted text strictly in single quotes ('example') instead of double quotes.
       
       CONVERSATION TERMINATION PROTOCOL:
       - When you determine that the conversation goals outlined by the instructor have been fully met, or the conversation should conclude, you MUST set the 'nextQuestion' field text value strictly to "CONVERSATION_COMPLETE".

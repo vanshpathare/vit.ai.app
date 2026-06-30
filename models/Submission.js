@@ -14,16 +14,25 @@ const submissionSchema = new mongoose.Schema(
     },
 
     // THE RANDOMIZATION SHIELD: Stores the specific question randomly selected for this student
-    assignedQuestion: {
-      type: String,
+    assignedQuestions: {
+      type: [String],
       required: true,
+      default: [],
     },
 
     // Modality Output Storage
-    responseText: {
-      type: String,
-      default: "", // Holds typed response or the speech-to-text audio transcript
-    },
+    responses: [
+      {
+        questionText: {
+          type: String,
+          required: true,
+        },
+        answerText: {
+          type: String,
+          default: "",
+        },
+      },
+    ],
 
     // ANTI-CHEAT METRIC: Tracks window out-of-focus event counts
     tabSwitchCount: {
