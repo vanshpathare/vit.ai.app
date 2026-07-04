@@ -194,8 +194,7 @@ export const submitAssignment = async (req, res) => {
     // Guardrail 1: Enforce deadline check
     if (new Date() > new Date(assignment.dueDate)) {
       return res.status(403).json({
-        message:
-          "The evaluation cut-off timeline has passed. Submission rejected.",
+        message: "The evaluation due date has passed. Submission rejected.",
       });
     }
 
@@ -379,5 +378,107 @@ export const overrideSubmissionScore = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
+  }
+};
+
+export const getStudentSubmissionDetails = async (req, res) => {
+  try {
+    const submission = await Submission.findById(req.params.id).populate({
+      path: "assignmentId",
+      // 1. Specify the fields you want to select from the assignment
+      select:
+        "title modality totalMarks dueDate questionPool aiNotes isResultPublished classId",
+      // 2. Deeply populate the classId field nested inside the assignment model to get its metadata
+      populate: {
+        path: "classId",
+        select: "name", // Only grab the classroom's name field
+      },
+    });
+
+    if (!submission) {
+      return res
+        .status(404)
+        .json({ message: "Submission workspace not found." });
+    }
+
+    // Security: Stop students from viewing other students' test files
+    if (submission.studentId.toString() !== req.user._id.toString()) {
+      return res
+        .status(403)
+        .json({ message: "Access Denied: Workspace ownership mismatch." });
+    }
+
+    // 🟢 SECURE DATA SANITIZATION BLOCK
+    // Convert to plain object to manipulate properties
+    let sanitizedSubmission = submission.toObject();
+
+    // 🟢 OVERRIDE SECURITY MASKING:
+    // If a manual override exists, mask it so the student thinks the AI or system evaluated it natively as that score
+    if (
+      sanitizedSubmission.finalScoreOverride !== null &&
+      sanitizedSubmission.finalScoreOverride !== undefined
+    ) {
+      if (sanitizedSubmission.aiEvaluation) {
+        // Force the AI total score to match the teacher's final decision
+        sanitizedSubmission.aiEvaluation.totalScoreGivenByAI =
+          sanitizedSubmission.finalScoreOverride;
+      }
+
+      // Delete the override property completely so it disappears from the Network Tab payload
+      delete sanitizedSubmission.finalScoreOverride;
+    }
+
+    // Security: Handle isResultPublished sanitation check right below this...
+    const assignment = sanitizedSubmission.assignmentId;
+    if (assignment && assignment.isResultPublished === false) {
+      if (sanitizedSubmission.aiEvaluation) {
+        sanitizedSubmission.aiEvaluation.totalScoreGivenByAI = null;
+        sanitizedSubmission.aiEvaluation.scores = null;
+      }
+      delete sanitizedSubmission.finalScoreOverride; // Extra safety fallback
+    }
+
+    // Send the sanitized, seamless payload
+    res.status(200).json(sanitizedSubmission);
+  } catch (error) {
+    res.status(500).json({
+      message: "Error loading submission data context.",
+      error: error.message,
+    });
+  }
+};
+
+// 🟢 TAMPER-PROOF REAL-TIME INFRACTION CONTROLLER
+export const logSubmissionInfraction = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Use $inc to atomically increment the counter directly inside MongoDB
+    const updatedSubmission = await Submission.findByIdAndUpdate(
+      id,
+      { $inc: { tabSwitchCount: 1 } },
+      { new: true, runValidators: true },
+    );
+
+    if (!updatedSubmission) {
+      return res
+        .status(404)
+        .json({ message: "Submission profile document context not found." });
+    }
+
+    console.log(
+      `🔒 [Proctor Alert] Submission ${id} tabSwitchCount securely incremented to: ${updatedSubmission.tabSwitchCount}`,
+    );
+
+    return res.status(200).json({
+      message: "Infraction successfully logged.",
+      tabSwitchCount: updatedSubmission.tabSwitchCount,
+    });
+  } catch (error) {
+    console.error("Error logging real-time proctor infraction:", error);
+    return res.status(500).json({
+      message: "Internal server registry logging failure.",
+      error: error.message,
+    });
   }
 };

@@ -25,6 +25,11 @@ export const evaluateWithGemini = async (
       
       Review the maximum allowed marks for each item in the criteria map. Score each item individually, then compute the absolute mathematical total sum.
       Provide highly specific, constructive diagnostic feedback explaining the scoring and identifying areas for structural optimization.
+
+      ADVANCED BEHAVIORAL PLAGIARISM & ANOMALY DETECTION GUARDRAILS:
+      1. Do NOT deduct marks based on suspicion alone.
+  2. If the text has characteristics of an exact copy-paste match (such as web scrapings, raw HTML tags, generic placeholder text, or pre-formatted documentation blocks) then deduct the marks based on the degree of plagiarism.
+  3. If a student's answer is simply exceptionally well-written, clear, grammatically flawless, and logically rich, treat it as a high-quality submission and award top marks without penalty.
     `;
 
     if (

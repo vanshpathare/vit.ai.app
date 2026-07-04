@@ -56,7 +56,7 @@ const assignmentSchema = new mongoose.Schema(
     // VISIBILITY FEATURE: Controls whether students can see their AI scores yet
     isResultPublished: {
       type: Boolean,
-      default: false, // Hidden by default until the teacher clicks "Publish"
+      default: true, // Hidden by default until the teacher clicks "Publish"
     },
 
     // ATTEMPTS CONTROL: If true, students can overwrite and re-evaluate their scores

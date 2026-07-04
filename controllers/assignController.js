@@ -170,6 +170,7 @@ export const initializeOrGetSubmission = async (req, res) => {
         assignedQuestions: assignedQuestionsArray,
         status: "pending",
         tabSwitchCount: 0,
+        responses: [],
       });
 
       console.log(
@@ -182,7 +183,7 @@ export const initializeOrGetSubmission = async (req, res) => {
       submissionId: submission._id,
       assignedQuestions: submission.assignedQuestions,
       status: submission.status,
-      responseText: submission.responseText,
+      responses: submission.responses || [],
       modality: assignment.modality,
       title: assignment.title,
       dueDate: assignment.dueDate,
@@ -196,14 +197,57 @@ export const initializeOrGetSubmission = async (req, res) => {
 };
 
 // 3. FETCH ALL ACTIVE ASSIGNMENTS INSIDE A CLASSROOM (Both Roles)
+// export const getClassAssignments = async (req, res) => {
+//   try {
+//     const assignments = await Assignment.find({
+//       classId: req.params.classId,
+//     }).sort({ createdAt: -1 });
+//     res.status(200).json(assignments);
+//   } catch (error) {
+//     res.status(500).json({ error: error.message });
+//   }
+// };
 export const getClassAssignments = async (req, res) => {
   try {
-    const assignments = await Assignment.find({
-      classId: req.params.classId,
-    }).sort({ createdAt: -1 });
-    res.status(200).json(assignments);
+    const { classId } = req.params;
+    const studentId = req.user._id; // Logged-in student's ID from your auth middleware
+
+    // 1. Fetch all raw assignments configured for this specific class
+    const assignments = await Assignment.find({ classId: classId });
+
+    // 2. Fetch all submissions made by THIS student in this classroom
+    const studentSubmissions = await Submission.find({
+      studentId: studentId,
+      // Only get submissions that match the assignments we just found
+      assignmentId: { $in: assignments.map((a) => a._id) },
+    });
+
+    // 3. 🟢 COMBINE THEM: Map over assignments and temporarily inject the submission status
+    const processedAssignments = assignments.map((assignment) => {
+      // Check if this student has an existing submission document for this assignment
+      const matchingSubmission = studentSubmissions.find(
+        (sub) => sub.assignmentId.toString() === assignment._id.toString(),
+      );
+
+      // Convert Mongoose document to plain JS object so we can add runtime fields
+      return {
+        ...assignment.toObject(),
+
+        // If a submission exists, use its real status ("submitted"). Otherwise, default to "pending"!
+        status: matchingSubmission ? matchingSubmission.status : "pending",
+
+        // Pass along the submissionId so the frontend knows exactly which submission workspace to open
+        submissionId: matchingSubmission ? matchingSubmission._id : null,
+      };
+    });
+
+    // 4. Send the processed array to the frontend
+    res.status(200).json(processedAssignments);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      message: "Error mapping assignment completion states.",
+      error: error.message,
+    });
   }
 };
 
