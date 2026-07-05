@@ -1,3 +1,5 @@
+//assignController.js
+
 import Assignment from "../models/Assignment.js";
 import Submission from "../models/Submission.js";
 import Classroom from "../models/Classroom.js";
@@ -197,51 +199,61 @@ export const initializeOrGetSubmission = async (req, res) => {
 };
 
 // 3. FETCH ALL ACTIVE ASSIGNMENTS INSIDE A CLASSROOM (Both Roles)
-// export const getClassAssignments = async (req, res) => {
-//   try {
-//     const assignments = await Assignment.find({
-//       classId: req.params.classId,
-//     }).sort({ createdAt: -1 });
-//     res.status(200).json(assignments);
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
+// 🟢 UPDATED: Now branches by role. Students still get their personal pending/submitted
+// status merged in. Teachers get the raw assignment list annotated with roster-wide
+// submission counts instead (a single "status" field made no sense for a teacher, since
+// every student in the class has their own independent status).
 export const getClassAssignments = async (req, res) => {
   try {
     const { classId } = req.params;
-    const studentId = req.user._id; // Logged-in student's ID from your auth middleware
 
     // 1. Fetch all raw assignments configured for this specific class
-    const assignments = await Assignment.find({ classId: classId });
-
-    // 2. Fetch all submissions made by THIS student in this classroom
-    const studentSubmissions = await Submission.find({
-      studentId: studentId,
-      // Only get submissions that match the assignments we just found
-      assignmentId: { $in: assignments.map((a) => a._id) },
+    const assignments = await Assignment.find({ classId }).sort({
+      createdAt: -1,
     });
 
-    // 3. 🟢 COMBINE THEM: Map over assignments and temporarily inject the submission status
+    const assignmentIds = assignments.map((a) => a._id);
+
+    // 🧑‍🏫 TEACHER VIEW: Attach roster-wide submission progress counts
+    if (req.user.role === "teacher") {
+      const allSubmissions = await Submission.find({
+        assignmentId: { $in: assignmentIds },
+      }).select("assignmentId status");
+
+      const processedForTeacher = assignments.map((assignment) => {
+        const related = allSubmissions.filter(
+          (s) => s.assignmentId.toString() === assignment._id.toString(),
+        );
+        return {
+          ...assignment.toObject(),
+          submittedCount: related.filter((s) => s.status === "submitted")
+            .length,
+          totalSubmissions: related.length,
+        };
+      });
+
+      return res.status(200).json(processedForTeacher);
+    }
+
+    // 🎓 STUDENT VIEW: Original per-student completion mapping logic
+    const studentId = req.user._id;
+    const studentSubmissions = await Submission.find({
+      studentId: studentId,
+      assignmentId: { $in: assignmentIds },
+    });
+
     const processedAssignments = assignments.map((assignment) => {
-      // Check if this student has an existing submission document for this assignment
       const matchingSubmission = studentSubmissions.find(
         (sub) => sub.assignmentId.toString() === assignment._id.toString(),
       );
 
-      // Convert Mongoose document to plain JS object so we can add runtime fields
       return {
         ...assignment.toObject(),
-
-        // If a submission exists, use its real status ("submitted"). Otherwise, default to "pending"!
         status: matchingSubmission ? matchingSubmission.status : "pending",
-
-        // Pass along the submissionId so the frontend knows exactly which submission workspace to open
         submissionId: matchingSubmission ? matchingSubmission._id : null,
       };
     });
 
-    // 4. Send the processed array to the frontend
     res.status(200).json(processedAssignments);
   } catch (error) {
     res.status(500).json({
@@ -358,9 +370,8 @@ export const parseMaterialForQuestions = async (req, res) => {
     }
 
     // 🧠 PASS THE CLEAN TEXT STRING INTO YOUR AI GENERATOR HELPER
-    // Note: Inside generateQuestionsFromMaterial, make sure you use this text instead of req.file!
     const questionPool = await generateQuestionsFromMaterial(
-      extractedText, // ◄── Pass the clean text string directly here!
+      extractedText,
       questionCount,
       dynamicFocus,
     );
@@ -373,6 +384,37 @@ export const parseMaterialForQuestions = async (req, res) => {
     console.error("❌ Material parsing engine failure:", error);
     res.status(500).json({
       message: "Material parsing engine failure.",
+      error: error.message,
+    });
+  }
+};
+
+// 7. 🟢 NEW: FETCH A SINGLE ASSIGNMENT'S FULL DETAILS (Teacher Only)
+// Powers both the "Edit Assignment" form and the Submission Tracker page, which need
+// the question pool, criteria, and classId that the list view doesn't return.
+export const getAssignmentById = async (req, res) => {
+  try {
+    const assignment = await Assignment.findById(req.params.id).populate(
+      "classId",
+      "name teacherId",
+    );
+
+    if (!assignment) {
+      return res.status(404).json({ message: "Assignment not found." });
+    }
+
+    // 🔒 OWNERSHIP GUARDRAIL: Only the classroom's own teacher may view/edit it
+    if (
+      assignment.classId?.teacherId &&
+      assignment.classId.teacherId.toString() !== req.user._id.toString()
+    ) {
+      return res.status(403).json({ message: "Unauthorized action." });
+    }
+
+    res.status(200).json(assignment);
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch assignment details.",
       error: error.message,
     });
   }

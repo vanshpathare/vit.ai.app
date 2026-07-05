@@ -1,166 +1,4 @@
-// import Submission from "../models/Submission.js";
-// import Assignment from "../models/Assignment.js";
-// import { evaluateWithGemini } from "../services/geminiService.js";
-// import { gradingQueue } from "../utils/gradingQueue.js";
-
-// // 1. EXECUTE AI EVALUATION ENGINE WITH FIFO CONCURRENCY BALANCING
-// export const submitAssignment = async (req, res) => {
-//   const { submissionId, responseText, tabSwitchCount } = req.body;
-
-//   try {
-//     const submission =
-//       await Submission.findById(submissionId).populate("assignmentId");
-//     if (!submission) {
-//       return res
-//         .status(404)
-//         .json({ message: "Target submission record not located." });
-//     }
-
-//     const assignment = submission.assignmentId;
-//     const criteriaMap = Object.fromEntries(assignment.evaluationCriteria);
-
-//     // Guardrail 1: Enforce deadline check
-//     if (new Date() > new Date(assignment.dueDate)) {
-//       return res.status(403).json({
-//         message:
-//           "The evaluation cut-off timeline has passed. Submission rejected.",
-//       });
-//     }
-
-//     // Guardrail 2: Enforce Attempt Rules (Exam Mode vs Practice Mode)
-//     if (
-//       submission.status === "submitted" &&
-//       !assignment.allowMultipleSubmissions
-//     ) {
-//       return res.status(400).json({
-//         message:
-//           "Assignment has already been completed and locked for this student.",
-//       });
-//     }
-
-//     // 🔒 Guardrail 3: Text-Only Input Validation Check
-//     if (
-//       assignment.modality === "Text-Only" &&
-//       (!responseText || responseText.trim() === "")
-//     ) {
-//       return res.status(400).json({
-//         message:
-//           "Validation Error: Submission response body text cannot be empty.",
-//       });
-//     }
-
-//     // Guardrail 4: Speech-Only Input File Check
-//     if (assignment.modality === "Speech-Only" && !req.file) {
-//       return res.status(400).json({
-//         message: "Validation Error: This turn-based route requires an audio file buffer stream.",
-//       });
-//     }
-
-//     let evaluationResult;
-
-//     // 🚀 ENQUEUE THE AI EVALUATION PROCESS TASK
-//     try {
-//       evaluationResult = await gradingQueue.enqueue(async () => {
-//         // MODE A: TEXT-ONLY EVALUATION FLOW
-//         if (assignment.modality === "Text-Only") {
-//           submission.responseText = responseText;
-//           return await evaluateWithGemini(
-//             submission.assignedQuestion, // ◄── FIXED: Now accurately passes the student's randomized locked question
-//             responseText,
-//             criteriaMap,
-//             assignment.aiNotes,
-//           );
-//         }
-//         // MODE B: SPEECH-ONLY MULTI-MODAL AUDIO FLOW
-//         else if (assignment.modality === "Speech-Only" && req.file) {
-//           return await evaluateWithGemini(
-//             submission.assignedQuestion,
-//             req.file,
-//             criteriaMap,
-//             assignment.aiNotes,
-//           );
-//         } else {
-//           throw new Error(
-//             "Missing text submission payload or file stream data context.",
-//           );
-//         }
-//       });
-
-//       console.log("🤖 RAW GEMINI SERVICE RESPONSE OUTFLOW:", evaluationResult);
-//     } catch (queueError) {
-//       return res.status(503).json({
-//         message:
-//           "The AI evaluation terminal is currently heavily congested. Please try again in a moment.",
-//         error: queueError.message,
-//       });
-//     }
-
-//     // Process transcription text assignment safely for speech mode
-//     if (assignment.modality === "Speech-Only") {
-//       submission.responseText =
-//         evaluationResult.transcript || "Audio Content Processed.";
-//     }
-
-//     // Bind structured evaluation payloads back to our database document parameters
-//     submission.aiEvaluation = {
-//       scores: evaluationResult.scores,
-//       totalScoreGivenByAI: evaluationResult.totalScoreGivenByAI,
-//       feedback: evaluationResult.feedback,
-//     };
-
-//     // Lock metrics parameters and log status complete tags
-//     submission.tabSwitchCount = parseInt(tabSwitchCount) || 0;
-//     submission.finalScoreOverride = null;
-//     submission.status = "submitted";
-//     submission.submittedAt = new Date();
-
-//     await submission.save();
-
-//     res.status(200).json({
-//       message: "Submission successfully evaluated and logged.",
-//       submission,
-//     });
-//   } catch (error) {
-//     console.error("❌ Evaluation Controller Runtime Crash:", error);
-//     res.status(500).json({
-//       message: "AI Processing execution module dropped.",
-//       error: error.message,
-//     });
-//   }
-// };
-
-// // 2. FETCH GRADES FOR INSTRUCTOR PANELS
-// export const getAssignmentSubmissions = async (req, res) => {
-//   try {
-//     const submissions = await Submission.find({
-//       assignmentId: req.params.assignmentId,
-//     })
-//       .populate("studentId", "name email")
-//       .sort({ submittedAt: -1 });
-//     res.status(200).json(submissions);
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
-
-// // 3. MANUAL INSTRUCTOR MARK OVERRIDES
-// export const overrideSubmissionScore = async (req, res) => {
-//   const { finalScoreOverride } = req.body;
-//   try {
-//     const submission = await Submission.findByIdAndUpdate(
-//       req.params.id,
-//       { $set: { finalScoreOverride } },
-//       { new: true },
-//     );
-//     res.status(200).json({
-//       message: "Teacher score override updated successfully.",
-//       submission,
-//     });
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
-
+//submitController.js
 import Submission from "../models/Submission.js";
 import Assignment from "../models/Assignment.js";
 import {
@@ -381,19 +219,26 @@ export const overrideSubmissionScore = async (req, res) => {
   }
 };
 
+// 4. FETCH FULL SUBMISSION DETAIL (Student = owner only, Teacher = any submission in their class)
+// 🟢 UPDATED: Previously this hard-blocked anyone who wasn't the exact student, which meant
+// teachers could never open the "Check" view. Teachers now get the complete, unmasked record
+// (raw AI score + any override) since they're the ones doing the grading. The existing masking
+// rules (hide marks until published, hide the override sentinel) still apply for students.
 export const getStudentSubmissionDetails = async (req, res) => {
   try {
-    const submission = await Submission.findById(req.params.id).populate({
-      path: "assignmentId",
-      // 1. Specify the fields you want to select from the assignment
-      select:
-        "title modality totalMarks dueDate questionPool aiNotes isResultPublished classId",
-      // 2. Deeply populate the classId field nested inside the assignment model to get its metadata
-      populate: {
-        path: "classId",
-        select: "name", // Only grab the classroom's name field
-      },
-    });
+    const submission = await Submission.findById(req.params.id)
+      .populate({
+        path: "assignmentId",
+        // 1. Specify the fields you want to select from the assignment
+        select:
+          "title modality totalMarks dueDate questionPool aiNotes isResultPublished classId evaluationCriteria allowMultipleSubmissions",
+        // 2. Deeply populate the classId field nested inside the assignment model to get its metadata
+        populate: {
+          path: "classId",
+          select: "name",
+        },
+      })
+      .populate("studentId", "name email");
 
     if (!submission) {
       return res
@@ -401,16 +246,25 @@ export const getStudentSubmissionDetails = async (req, res) => {
         .json({ message: "Submission workspace not found." });
     }
 
-    // Security: Stop students from viewing other students' test files
-    if (submission.studentId.toString() !== req.user._id.toString()) {
+    const isOwner =
+      submission.studentId._id.toString() === req.user._id.toString();
+    const isTeacher = req.user.role === "teacher";
+
+    // Security: Only the student who owns it, or a teacher grading it, may view this workspace
+    if (!isOwner && !isTeacher) {
       return res
         .status(403)
         .json({ message: "Access Denied: Workspace ownership mismatch." });
     }
 
-    // 🟢 SECURE DATA SANITIZATION BLOCK
-    // Convert to plain object to manipulate properties
     let sanitizedSubmission = submission.toObject();
+
+    // 🧑‍🏫 TEACHER VIEW: Return the complete unmasked record so grading has full context
+    if (isTeacher) {
+      return res.status(200).json(sanitizedSubmission);
+    }
+
+    // 🎓 STUDENT VIEW SANITIZATION BELOW (unchanged)
 
     // 🟢 OVERRIDE SECURITY MASKING:
     // If a manual override exists, mask it so the student thinks the AI or system evaluated it natively as that score

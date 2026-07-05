@@ -6,6 +6,7 @@ import {
   toggleResultPublish,
   updateAssignmentSettings,
   parseMaterialForQuestions,
+  getAssignmentById, // 🟢 NEW
 } from "../controllers/assignController.js";
 import { protect, teacherOnly } from "../middleware/authMiddleware.js";
 import { upload } from "../middleware/uploadMiddleware.js";
@@ -37,5 +38,9 @@ router.post(
   upload.single("docFile"),
   parseMaterialForQuestions,
 );
+
+// 7. 🟢 NEW: Fetch a single assignment's full detail (question pool, criteria, classId)
+// Used by the Edit Assignment form and the Submission Tracker page.
+router.get("/:id", teacherOnly, getAssignmentById);
 
 export default router;
