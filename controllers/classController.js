@@ -1,4 +1,6 @@
 import Classroom from "../models/Classroom.js";
+import Assignment from "../models/Assignment.js";
+import Submission from "../models/Submission.js";
 
 // 1. CREATE NEW CLASSROOM (Teacher Only)
 export const createClassroom = async (req, res) => {
@@ -114,6 +116,53 @@ export const getClassroomDetails = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       message: "Failed to gather structural detail payload.",
+      error: error.message,
+    });
+  }
+};
+
+// 5. 🟢 NEW: GENERATE GRADEBOOK DATA FOR EXCEL EXPORT (Teacher Only)
+// Returns the classroom roster (already alphabetically sorted by name), every
+// assignment created in this classroom, and every *submitted* grade. The frontend
+// uses the teacher's manual override when present and falls back to the AI-given
+// score otherwise, then builds the .xlsx file client-side.
+export const getClassGradebook = async (req, res) => {
+  try {
+    const classroom = await Classroom.findOne({
+      _id: req.params.id,
+      teacherId: req.user._id,
+    }).populate("studentsEnrolled", "name email");
+
+    if (!classroom) {
+      return res.status(403).json({
+        message:
+          "Unauthorized action. You are not authorized to view this classroom's gradebook.",
+      });
+    }
+
+    const assignments = await Assignment.find({ classId: req.params.id })
+      .select("title totalMarks createdAt")
+      .sort({ createdAt: 1 });
+
+    const submissions = await Submission.find({
+      assignmentId: { $in: assignments.map((a) => a._id) },
+      status: "submitted",
+    }).select("assignmentId studentId aiEvaluation finalScoreOverride");
+
+    // Sort the roster alphabetically by name before sending it back
+    const sortedStudents = [...classroom.studentsEnrolled].sort((a, b) =>
+      (a.name || "").localeCompare(b.name || ""),
+    );
+
+    res.status(200).json({
+      classroomName: classroom.name,
+      students: sortedStudents,
+      assignments,
+      submissions,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to compile gradebook data.",
       error: error.message,
     });
   }

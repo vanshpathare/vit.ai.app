@@ -4,6 +4,7 @@ import {
   joinClassroom,
   getClassroomDetails,
   getUserClassrooms,
+  getClassGradebook, // 🟢 NEW
 } from "../controllers/classController.js";
 import { protect, teacherOnly } from "../middleware/authMiddleware.js";
 
@@ -21,5 +22,8 @@ router.post("/join", joinClassroom); // Students use a unique token string to jo
 
 // 3. Roster Management
 router.get("/:id", getClassroomDetails); // Retrieves the list of active users in the classroom
+
+// 4. 🟢 NEW: Gradebook export data (roster + assignments + graded submissions)
+router.get("/:id/gradebook", teacherOnly, getClassGradebook);
 
 export default router;

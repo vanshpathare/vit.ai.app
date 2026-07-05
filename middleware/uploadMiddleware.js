@@ -39,6 +39,6 @@ export const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 100 * 1024 * 1024, // Caps multi-part buffer sizes at 15MB maximum to optimize throughput safety
+    fileSize: 100 * 1024 * 1024, // Caps multi-part buffer sizes at 100MB maximum to optimize throughput safety
   },
 });
