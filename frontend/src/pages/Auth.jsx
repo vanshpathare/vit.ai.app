@@ -1,5 +1,15 @@
 import React, { useState } from "react";
 import { useAuth } from "../context/AuthContext";
+import {
+  loginUserAPI,
+  registerUserAPI,
+  verifyOtpAPI,
+  forgotPasswordAPI,
+  resetPasswordAPI,
+} from "../services/api"; // 🔧 FIXED: route through the shared axios instance instead of a
+// hardcoded `fetch("http://localhost:5001...")` call, so this screen respects
+// VITE_API_BASE_URL like every other screen in the app, and can't accidentally
+// double up the "/api" prefix the way concatenating strings by hand risked.
 
 // 👁️ Small inline SVG icons so we don't need an extra icon library dependency
 function EyeIcon(props) {
@@ -43,7 +53,7 @@ function EyeOffIcon(props) {
   );
 }
 
-// 🟢 NEW: Reusable password input with a visibility ("eye") toggle baked in.
+// 🟢 Reusable password input with a visibility ("eye") toggle baked in.
 // Kept local to this file since it's only ever used inside the auth form.
 function PasswordField({ label, name, value, onChange, placeholder, extra }) {
   const [visible, setVisible] = useState(false);
@@ -91,9 +101,9 @@ function Auth() {
     name: "",
     email: "",
     password: "",
-    confirmPassword: "", // 🟢 NEW: register-flow confirmation
+    confirmPassword: "", // register-flow confirmation
     newPassword: "",
-    confirmNewPassword: "", // 🟢 NEW: reset-flow confirmation
+    confirmNewPassword: "", // reset-flow confirmation
     role: "student",
     otp: "",
   });
@@ -113,7 +123,7 @@ function Auth() {
     setErrorMsg("");
     setSuccessMsg("");
 
-    // 🟢 NEW: Client-side confirm-password guardrails before hitting the network at all
+    // Client-side confirm-password guardrails before hitting the network at all
     if (
       viewMode === "register" &&
       formData.password !== formData.confirmPassword
@@ -132,57 +142,47 @@ function Auth() {
     setIsSubmitting(true);
 
     try {
-      let endpoint = "/api/auth/login";
-      let payload = {};
+      // 🔧 FIXED: dispatch to the matching API wrapper function instead of building
+      // a raw endpoint string + fetch(). Each wrapper already knows its own path
+      // relative to the shared baseURL, so there's no risk of double-prefixing "/api".
+      let response;
 
-      // 🗺️ Map view states directly to your backend controller specs
       switch (viewMode) {
         case "login":
-          endpoint = "/api/auth/login";
-          payload = { email: formData.email, password: formData.password };
+          response = await loginUserAPI({
+            email: formData.email,
+            password: formData.password,
+          });
           break;
         case "register":
-          endpoint = "/api/auth/register";
-          payload = {
+          response = await registerUserAPI({
             name: formData.name,
             email: formData.email,
             password: formData.password,
             role: formData.role,
-          };
+          });
           break;
         case "verify_otp":
-          endpoint = "/api/auth/verify-otp";
-          payload = { email: formData.email, otp: formData.otp };
+          response = await verifyOtpAPI({
+            email: formData.email,
+            otp: formData.otp,
+          });
           break;
         case "forgot":
-          endpoint = "/api/auth/forgot-password";
-          payload = { email: formData.email };
+          response = await forgotPasswordAPI({ email: formData.email });
           break;
         case "reset_password":
-          endpoint = "/api/auth/reset-password";
-          payload = {
+          response = await resetPasswordAPI({
             email: formData.email,
             otp: formData.otp,
             newPassword: formData.newPassword,
-          };
+          });
           break;
         default:
           break;
       }
 
-      const response = await fetch(`http://localhost:5001${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          data.message || "Server rejected authentication request.",
-        );
-      }
+      const data = response.data;
 
       // 🔄 Direct Next-Step State Machine Routing
       if (viewMode === "register") {
@@ -202,7 +202,15 @@ function Auth() {
         login(data.user, data.token);
       }
     } catch (err) {
-      setErrorMsg(err.message);
+      // 🔧 FIXED: axios throws on non-2xx responses (unlike raw fetch, which only
+      // rejects on network failure), so the error message now comes from
+      // err.response.data.message — matching the pattern used everywhere else
+      // in the app that already goes through this same API instance.
+      setErrorMsg(
+        err.response?.data?.message ||
+          err.message ||
+          "Server rejected authentication request.",
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -325,7 +333,7 @@ function Auth() {
             />
           )}
 
-          {/* 🟢 NEW: Confirm password for registration */}
+          {/* Confirm password for registration */}
           {viewMode === "register" && (
             <PasswordField
               label="Confirm Password"
@@ -346,7 +354,7 @@ function Auth() {
             />
           )}
 
-          {/* 🟢 NEW: Confirm password for the reset flow */}
+          {/* Confirm password for the reset flow */}
           {viewMode === "reset_password" && (
             <PasswordField
               label="Confirm New Password"
