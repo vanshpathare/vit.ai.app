@@ -1,3 +1,64 @@
+import nodemailer from "nodemailer";
+import dotenv from "dotenv";
+
+dotenv.config();
+
+// 1. Create the Nodemailer Transporter
+const transporter = nodemailer.createTransport({
+  host: "smtp.gmail.com",
+  port: 465, // SSL Port (Bypasses Render port blocks)
+  secure: true, // Force SSL
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS, // Your 16-character Google App Password
+  },
+  tls: {
+    rejectUnauthorized: false, // Prevents connection hangs on production
+  },
+});
+
+// 2. Export Helper (Named sendOTPEmail with 3 parameters to match authController)
+export const sendOTPEmail = async (toEmail, name, otpCode) => {
+  try {
+    // 💻 AUTOMATED DEVELOPMENT STREAM: Log OTP to terminal when testing locally
+    if (process.env.NODE_ENV === "development" || !process.env.NODE_ENV) {
+      console.log("\n========================================================");
+      console.log("🛠️  [DEV ENVIRONMENT ACTIVE - SIMULATING EMAIL]");
+      console.log(`📬 Outgoing Mail To : ${toEmail}`);
+      console.log(`👤 Recipient Name   : ${name}`);
+      console.log(`🔑 VERIFICATION OTP : ${otpCode}`);
+      console.log("========================================================\n");
+
+      return true; // Bypass sending actual email in dev
+    }
+
+    // 🌐 LIVE PRODUCTION TRANSMISSION PIPELINE
+    const info = await transporter.sendMail({
+      from: `"VIT LangAI Portal" <${process.env.EMAIL_USER}>`,
+      to: toEmail,
+      subject: "Verify Your VIT LangAI Account",
+      html: `
+        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; max-width: 500px; margin: 0 auto; rounded: 8px;">
+          <h2 style="color: #4f46e5;">Welcome to LangAI, ${name}!</h2>
+          <p style="color: #334155; font-size: 14px;">Use the following One-Time Password (OTP) to complete your verification:</p>
+          <div style="background: #f8fafc; border: 1px dashed #cbd5e1; padding: 15px; text-align: center; margin: 20px 0; border-radius: 6px;">
+            <h1 style="font-family: monospace; letter-spacing: 6px; color: #4f46e5; margin: 0;">${otpCode}</h1>
+          </div>
+          <p style="color: #64748b; font-size: 12px;">This validation code will expire in exactly 10 minutes.</p>
+        </div>
+      `,
+    });
+
+    console.log(
+      `✅ Production Email Sent Successfully. MessageId: ${info.messageId}`,
+    );
+    return true;
+  } catch (error) {
+    console.error(`❌ Nodemailer Email Gateway Exception: ${error.message}`);
+    return false;
+  }
+};
+
 // import { Resend } from "resend";
 // import dotenv from "dotenv";
 
@@ -60,36 +121,3 @@
 //     return false;
 //   }
 // };
-
-import nodemailer from "nodemailer";
-
-// 1. Create the transporter using environment variables
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465, // SSL Port (Bypasses Render port blocks)
-  secure: true, // Force SSL
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // Uses the 16-char code from Render
-  },
-  tls: {
-    rejectUnauthorized: false, // Prevents connection hangs on production
-  },
-});
-
-// 2. Export the send OTP helper
-export const sendOtpEmail = async (userEmail, otp) => {
-  return await transporter.sendMail({
-    from: `"VIT Portal Verification" <${process.env.EMAIL_USER}>`,
-    to: userEmail, // Works for @vit.edu.in, @gmail.com, or any email!
-    subject: "Your VIT Portal OTP Code",
-    html: `
-      <div style="font-family: Arial, sans-serif; padding: 20px;">
-        <h2>Identity Verification</h2>
-        <p>Your OTP code for the VIT Portal is:</p>
-        <h1 style="font-family: monospace; letter-spacing: 4px; color: #4f46e5;">${otp}</h1>
-        <p>This code is valid for 10 minutes.</p>
-      </div>
-    `,
-  });
-};
