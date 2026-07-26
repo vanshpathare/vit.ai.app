@@ -1,23 +1,9 @@
-import nodemailer from "nodemailer";
+import axios from "axios";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// 1. Create the Nodemailer Transporter
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465, // SSL Port (Bypasses Render port blocks)
-  secure: true, // Force SSL
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS, // Your 16-character Google App Password
-  },
-  tls: {
-    rejectUnauthorized: false, // Prevents connection hangs on production
-  },
-});
-
-// 2. Export Helper (Named sendOTPEmail with 3 parameters to match authController)
+// Export Helper (Named sendOTPEmail with 3 parameters matching authController)
 export const sendOTPEmail = async (toEmail, name, otpCode) => {
   try {
     // 💻 AUTOMATED DEVELOPMENT STREAM: Log OTP to terminal when testing locally
@@ -32,29 +18,50 @@ export const sendOTPEmail = async (toEmail, name, otpCode) => {
       return true; // Bypass sending actual email in dev
     }
 
-    // 🌐 LIVE PRODUCTION TRANSMISSION PIPELINE
-    const info = await transporter.sendMail({
-      from: `"VIT LangAI Portal" <${process.env.EMAIL_USER}>`,
-      to: toEmail,
-      subject: "Verify Your VIT LangAI Account",
-      html: `
-        <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; max-width: 500px; margin: 0 auto; rounded: 8px;">
-          <h2 style="color: #4f46e5;">Welcome to LangAI, ${name}!</h2>
-          <p style="color: #334155; font-size: 14px;">Use the following One-Time Password (OTP) to complete your verification:</p>
-          <div style="background: #f8fafc; border: 1px dashed #cbd5e1; padding: 15px; text-align: center; margin: 20px 0; border-radius: 6px;">
-            <h1 style="font-family: monospace; letter-spacing: 6px; color: #4f46e5; margin: 0;">${otpCode}</h1>
+    // 🌐 LIVE PRODUCTION TRANSMISSION PIPELINE (Via Brevo HTTPS API)
+    if (!process.env.BREVO_API_KEY || !process.env.SENDER_EMAIL) {
+      console.error(
+        "❌ Production Error: BREVO_API_KEY or SENDER_EMAIL is missing in environment variables.",
+      );
+      return false;
+    }
+
+    const response = await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        sender: {
+          name: "VIT LangAI Portal",
+          email: process.env.SENDER_EMAIL, // Your verified Brevo account email
+        },
+        to: [{ email: toEmail, name: name }],
+        subject: "Verify Your VIT LangAI Account",
+        htmlContent: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; max-width: 500px; margin: 0 auto; border-radius: 8px;">
+            <h2 style="color: #4f46e5;">Welcome to LangAI, ${name}!</h2>
+            <p style="color: #334155; font-size: 14px;">Use the following One-Time Password (OTP) to complete your verification sequence:</p>
+            <div style="background: #f8fafc; border: 1px dashed #cbd5e1; padding: 15px; text-align: center; margin: 20px 0; border-radius: 6px;">
+              <h1 style="font-family: monospace; letter-spacing: 6px; color: #4f46e5; margin: 0;">${otpCode}</h1>
+            </div>
+            <p style="color: #64748b; font-size: 12px;">This validation checkpoint code will expire in exactly 10 minutes.</p>
           </div>
-          <p style="color: #64748b; font-size: 12px;">This validation code will expire in exactly 10 minutes.</p>
-        </div>
-      `,
-    });
+        `,
+      },
+      {
+        headers: {
+          "api-key": process.env.BREVO_API_KEY,
+          "Content-Type": "application/json",
+        },
+      },
+    );
 
     console.log(
-      `✅ Production Email Sent Successfully. MessageId: ${info.messageId}`,
+      `✅ Brevo API Email Sent Successfully. MessageId: ${response.data.messageId}`,
     );
     return true;
   } catch (error) {
-    console.error(`❌ Nodemailer Email Gateway Exception: ${error.message}`);
+    console.error(
+      `❌ Brevo API Email Exception: ${error.response?.data?.message || error.message}`,
+    );
     return false;
   }
 };
