@@ -13,7 +13,7 @@ dotenv.config();
 
 const app = express();
 
-const CLIENT_ORIGIN = "https://vit-ai-app.onrender.com";
+//const CLIENT_ORIGIN = "https://vit-ai-app.onrender.com";
 
 const allowedOrigins = (process.env.CLIENT_ORIGIN || "http://localhost:5173")
   .split(",")
