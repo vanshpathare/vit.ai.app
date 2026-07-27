@@ -1,9 +1,6 @@
 import axios from "axios";
 
 // 🌐 Create a unified base routing pipeline pointing to your Node server
-// 🔧 FIXED: was `process.env.VITE_API_BASE_URL` — `process` doesn't exist in browser
-// code and Vite doesn't inject it. Vite's client-side env vars are read through
-// `import.meta.env` instead. This was silently always falling back to localhost.
 const API = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:5001/api",
   headers: {
@@ -34,6 +31,10 @@ export const forgotPasswordAPI = (data) =>
   API.post("/auth/forgot-password", data);
 export const resetPasswordAPI = (data) =>
   API.post("/auth/reset-password", data);
+// 🟢 NEW: Lets an already-registered student self-report their roll number once
+// (migration helper for accounts created before this field existed).
+export const updateRollNumberAPI = (rollNumber) =>
+  API.patch("/auth/roll-number", { rollNumber });
 
 // 🏫 CLASSROOM MANAGEMENT (shared + teacher)
 export const joinClassroomAPI = (joinCode) =>

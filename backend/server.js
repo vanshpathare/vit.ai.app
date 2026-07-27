@@ -19,7 +19,7 @@ const app = express();
 // env var value (or in the browser's Origin header) can't cause a false mismatch —
 // browsers never send a trailing slash in the Origin header, but it's an easy typo
 // to make when copy-pasting a URL into Render's dashboard.
-const allowedOrigins = (process.env.CLIENT_ORIGIN || "http://localhost:5173")
+const allowedOrigins = (process.env.CLIENT_ORIGIN || "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);

@@ -10,6 +10,7 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     const storedToken = localStorage.getItem("token");
     const storedUser = localStorage.getItem("user");
+
     if (storedToken && storedUser && storedUser !== "undefined") {
       try {
         setUser(JSON.parse(storedUser));
@@ -19,11 +20,10 @@ export const AuthProvider = ({ children }) => {
         localStorage.removeItem("token");
       }
     } else if (storedUser === "undefined" || storedToken === "undefined") {
-      // Clean up corrupted keys even if the `if` above didn't run (e.g. only one
-      // of the two keys got corrupted) so they don't linger indefinitely.
       localStorage.removeItem("user");
       localStorage.removeItem("token");
     }
+
     setLoading(false);
   }, []);
 
@@ -40,6 +40,19 @@ export const AuthProvider = ({ children }) => {
     localStorage.setItem("token", token);
     localStorage.setItem("user", JSON.stringify(userData));
     setUser(userData);
+    return true;
+  };
+
+  // 🟢 NEW: Patches fields on the currently logged-in user (e.g. after a student adds
+  // their roll number via Account.jsx) without needing a full re-login. Merges into
+  // both React state and localStorage so a page refresh doesn't lose the update.
+  const updateUser = (partialUserData) => {
+    setUser((prev) => {
+      if (!prev) return prev;
+      const updated = { ...prev, ...partialUserData };
+      localStorage.setItem("user", JSON.stringify(updated));
+      return updated;
+    });
   };
 
   // Handle Logout Clean Sweeps
@@ -50,7 +63,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout, loading }}>
+    <AuthContext.Provider value={{ user, login, logout, loading, updateUser }}>
       {!loading && children}
     </AuthContext.Provider>
   );

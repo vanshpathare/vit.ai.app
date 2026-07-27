@@ -6,10 +6,7 @@ import {
   verifyOtpAPI,
   forgotPasswordAPI,
   resetPasswordAPI,
-} from "../services/api"; // 🔧 FIXED: route through the shared axios instance instead of a
-// hardcoded `fetch("http://localhost:5001...")` call, so this screen respects
-// VITE_API_BASE_URL like every other screen in the app, and can't accidentally
-// double up the "/api" prefix the way concatenating strings by hand risked.
+} from "../services/api";
 
 // 👁️ Small inline SVG icons so we don't need an extra icon library dependency
 function EyeIcon(props) {
@@ -54,7 +51,6 @@ function EyeOffIcon(props) {
 }
 
 // 🟢 Reusable password input with a visibility ("eye") toggle baked in.
-// Kept local to this file since it's only ever used inside the auth form.
 function PasswordField({ label, name, value, onChange, placeholder, extra }) {
   const [visible, setVisible] = useState(false);
 
@@ -96,15 +92,15 @@ function Auth() {
   // View states: 'login' | 'register' | 'verify_otp' | 'forgot' | 'reset_password'
   const [viewMode, setViewMode] = useState("login");
 
-  // Central form data hub matching your backend parameters exactly
   const [formData, setFormData] = useState({
     name: "",
     email: "",
     password: "",
-    confirmPassword: "", // register-flow confirmation
+    confirmPassword: "",
     newPassword: "",
-    confirmNewPassword: "", // reset-flow confirmation
+    confirmNewPassword: "",
     role: "student",
+    rollNumber: "", // 🟢 NEW
     otp: "",
   });
 
@@ -123,7 +119,6 @@ function Auth() {
     setErrorMsg("");
     setSuccessMsg("");
 
-    // Client-side confirm-password guardrails before hitting the network at all
     if (
       viewMode === "register" &&
       formData.password !== formData.confirmPassword
@@ -138,13 +133,21 @@ function Auth() {
       setErrorMsg("Passwords do not match. Please re-check both fields.");
       return;
     }
+    // 🟢 NEW: Roll number is required for student registrations, checked client-side
+    // before hitting the network (the backend re-validates this too — never trust
+    // client-side checks alone).
+    if (
+      viewMode === "register" &&
+      formData.role === "student" &&
+      !formData.rollNumber.trim()
+    ) {
+      setErrorMsg("Please enter your roll number.");
+      return;
+    }
 
     setIsSubmitting(true);
 
     try {
-      // 🔧 FIXED: dispatch to the matching API wrapper function instead of building
-      // a raw endpoint string + fetch(). Each wrapper already knows its own path
-      // relative to the shared baseURL, so there's no risk of double-prefixing "/api".
       let response;
 
       switch (viewMode) {
@@ -160,6 +163,9 @@ function Auth() {
             email: formData.email,
             password: formData.password,
             role: formData.role,
+            // 🟢 NEW: only meaningful for students; backend ignores it for teachers
+            rollNumber:
+              formData.role === "student" ? formData.rollNumber : undefined,
           });
           break;
         case "verify_otp":
@@ -184,28 +190,27 @@ function Auth() {
 
       const data = response.data;
 
-      // 🔄 Direct Next-Step State Machine Routing
       if (viewMode === "register") {
         setSuccessMsg(
           data.message ||
             "Registration initialized. Please check your VIT mail inbox.",
         );
-        setViewMode("verify_otp"); // Advance instantly to OTP verification overlay
+        setViewMode("verify_otp");
       } else if (viewMode === "forgot") {
         setSuccessMsg("Verification recovery token sent to your email.");
-        setViewMode("reset_password"); // Advance to password update form
+        setViewMode("reset_password");
       } else if (viewMode === "reset_password") {
         setSuccessMsg("Password updated and encrypted. You can now log in.");
         setViewMode("login");
       } else if (viewMode === "login" || viewMode === "verify_otp") {
-        // Core login successful hooks
-        login(data.user, data.token);
+        const success = login(data.user, data.token);
+        if (!success) {
+          setErrorMsg(
+            "Login response was incomplete — the app may not be reaching the real backend.",
+          );
+        }
       }
     } catch (err) {
-      // 🔧 FIXED: axios throws on non-2xx responses (unlike raw fetch, which only
-      // rejects on network failure), so the error message now comes from
-      // err.response.data.message — matching the pattern used everywhere else
-      // in the app that already goes through this same API instance.
       setErrorMsg(
         err.response?.data?.message ||
           err.message ||
@@ -219,7 +224,6 @@ function Auth() {
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4 font-sans antialiased text-slate-900">
       <div className="w-full max-w-md bg-white border border-slate-200 rounded p-8 shadow-sm space-y-6">
-        {/* Teams Branding Header Layout */}
         <div className="text-center space-y-1.5">
           <div className="inline-flex items-center justify-center w-10 h-10 bg-indigo-600 rounded text-white font-bold text-lg mb-1">
             L
@@ -236,7 +240,6 @@ function Auth() {
           </p>
         </div>
 
-        {/* Dynamic Context Banners */}
         {errorMsg && (
           <div className="p-3 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs font-medium rounded leading-relaxed">
             ⚠️ {errorMsg}
@@ -248,7 +251,6 @@ function Auth() {
           </div>
         )}
 
-        {/* Primary Data Input Form */}
         <form onSubmit={executeFormSubmit} className="space-y-4">
           {viewMode === "register" && (
             <div className="space-y-1">
@@ -263,6 +265,25 @@ function Auth() {
                 onChange={handleInputChange}
                 placeholder="Rohit Sharma"
                 className="w-full h-9 px-3 text-sm bg-slate-50 border border-slate-200 rounded focus:bg-white focus:border-indigo-600 focus:outline-none transition-colors"
+              />
+            </div>
+          )}
+
+          {/* 🟢 NEW: Roll Number — only shown/required for student registrations.
+              Placed right after Full Name so it reads naturally as part of identity. */}
+          {viewMode === "register" && formData.role === "student" && (
+            <div className="space-y-1">
+              <label className="text-xs font-semibold text-slate-700 uppercase tracking-wider">
+                Roll Number
+              </label>
+              <input
+                type="text"
+                name="rollNumber"
+                required
+                value={formData.rollNumber}
+                onChange={handleInputChange}
+                placeholder="e.g. 24102B0011"
+                className="w-full h-9 px-3 text-sm font-mono uppercase bg-slate-50 border border-slate-200 rounded focus:bg-white focus:border-indigo-600 focus:outline-none transition-colors"
               />
             </div>
           )}
@@ -333,7 +354,6 @@ function Auth() {
             />
           )}
 
-          {/* Confirm password for registration */}
           {viewMode === "register" && (
             <PasswordField
               label="Confirm Password"
@@ -354,7 +374,6 @@ function Auth() {
             />
           )}
 
-          {/* Confirm password for the reset flow */}
           {viewMode === "reset_password" && (
             <PasswordField
               label="Confirm New Password"
@@ -416,7 +435,6 @@ function Auth() {
           </button>
         </form>
 
-        {/* Footer Navigation Anchors */}
         <div className="pt-4 border-t border-slate-200 text-center text-xs text-slate-600 space-y-2">
           {viewMode === "login" && (
             <p>

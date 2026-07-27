@@ -7,7 +7,8 @@ import {
   getClassGradebookAPI,
 } from "../../services/api";
 import AssignmentEditorModal from "../../components/teacher/AssignmentEditorModal";
-import { getInitials } from "../../utils/getInitials"; // 🟢 NEW: proper first+last initials for student avatars
+import { getInitials } from "../../utils/getInitials";
+import { compareRollNumbers } from "../../utils/rollNumberSort"; // 🟢 NEW
 
 function ClassDetail() {
   const { classId } = useParams();
@@ -57,16 +58,20 @@ function ClassDetail() {
     fetchAssignments();
   };
 
-  // 🟢 NEW: Alphabetically sorted roster — used for the Students tab display
+  // 🔧 FIXED: was sorting alphabetically by name — now sorts by roll number
+  // (rule a: year, rule b: division letter A<B<C, rule c: serial number ascending).
+  // The backend's getClassroomDetails already returns students in this order, but
+  // sorting again here is cheap defense-in-depth in case that ever changes.
   const sortedStudents = useMemo(() => {
     return [...(classroom?.studentsEnrolled || [])].sort((a, b) =>
-      (a.name || "").localeCompare(b.name || ""),
+      compareRollNumbers(a.rollNumber, b.rollNumber),
     );
   }, [classroom]);
 
-  // 🟢 NEW: Builds and downloads an .xlsx gradebook — rows are students (A→Z),
-  // columns are assignments, and each cell uses the teacher's override when one
-  // exists, otherwise the AI-given score.
+  // 🟢 UPDATED: Builds and downloads an .xlsx gradebook — rows are students sorted
+  // by roll number, columns are assignments, and each cell uses the teacher's
+  // override when one exists, otherwise the AI-given score. Ungraded/not-submitted
+  // cells now show a plain "-" instead of the "Not Submitted" text.
   const handleExportGradebook = async () => {
     setIsExporting(true);
     setExportError("");
@@ -83,7 +88,7 @@ function ClassDetail() {
         const submission = submissions.find(
           (s) => s.studentId === studentId && s.assignmentId === assignmentId,
         );
-        if (!submission) return "Not Submitted";
+        if (!submission) return "-"; // 🔧 FIXED: was "Not Submitted"
         if (
           submission.finalScoreOverride !== null &&
           submission.finalScoreOverride !== undefined
@@ -93,13 +98,22 @@ function ClassDetail() {
         return submission.aiEvaluation?.totalScoreGivenByAI ?? "Pending";
       };
 
+      // 🔧 FIXED: backend already sorts by roll number, but re-sort client-side too
+      // for the same defense-in-depth reason as sortedStudents above.
+      const sortedForExport = [...students].sort((a, b) =>
+        compareRollNumbers(a.rollNumber, b.rollNumber),
+      );
+
+      // 🟢 NEW: Roll No is now the first column
       const headerRow = [
+        "Roll No",
         "Student Name",
         "Email",
         ...gbAssignments.map((a) => `${a.title} (/${a.totalMarks})`),
       ];
 
-      const dataRows = students.map((student) => [
+      const dataRows = sortedForExport.map((student) => [
+        student.rollNumber || "-",
         student.name,
         student.email,
         ...gbAssignments.map((a) => getScoreForCell(student._id, a._id)),
@@ -314,7 +328,11 @@ function ClassDetail() {
                     {getInitials(student.name, "ST")}
                   </div>
                   <div className="min-w-0">
+                    {/* 🟢 NEW: Roll number shown before the name */}
                     <p className="text-sm font-bold text-slate-800 truncate">
+                      <span className="font-mono text-indigo-600 mr-1.5">
+                        {student.rollNumber || "—"}
+                      </span>
                       {student.name}
                     </p>
                     <p className="text-xs text-slate-400 truncate">

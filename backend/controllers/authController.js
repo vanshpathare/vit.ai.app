@@ -1,14 +1,21 @@
 import User from "../models/User.js";
 import jwt from "jsonwebtoken";
 import { sendOTPEmail } from "../services/emailService.js";
+import { parseRollNumber } from "../utils/rollNumberSort.js";
 
 const generateToken = (id, role) => {
   return jwt.sign({ id, role }, process.env.JWT_SECRET, { expiresIn: "15d" });
 };
 
+// 🟢 NEW: Light format check — same shape the sort comparator expects (2-digit year
+// ... 1 letter ... 4-digit serial). Doesn't hard-fail on unusual middle segments,
+// just confirms the three pieces that actually matter for sorting are present.
+const isPlausibleRollNumber = (value) =>
+  /^\d{2}.*?[A-Za-z]\d{4}$/.test((value || "").trim());
+
 // 1. REGISTER / RESUBMIT ACCOUNT (With Anti-Zombie Protection)
 export const registerUser = async (req, res) => {
-  const { name, email, password, role } = req.body;
+  const { name, email, password, role, rollNumber } = req.body;
 
   try {
     // 🎓 1. VIT CAMPUS DOMAIN GUARDRAIL
@@ -33,6 +40,22 @@ export const registerUser = async (req, res) => {
       });
     }
 
+    // 🟢 3. ROLL NUMBER GUARDRAIL (Students only — teachers don't have one)
+    const normalizedRoll = rollNumber ? rollNumber.trim().toUpperCase() : "";
+    if (role === "student") {
+      if (!normalizedRoll) {
+        return res.status(400).json({
+          message: "Roll number is required for student registration.",
+        });
+      }
+      if (!isPlausibleRollNumber(normalizedRoll)) {
+        return res.status(400).json({
+          message:
+            "Roll number format looks invalid. Expected something like 24102B0011.",
+        });
+      }
+    }
+
     // ─── EXISTING REGISTRATION ENGINE CONTINUES BELOW ───
     const normalizedEmail = email.toLowerCase(); // Normalize early for structural data safety
     const existingUser = await User.findOne({ email: normalizedEmail });
@@ -50,6 +73,7 @@ export const registerUser = async (req, res) => {
       existingUser.name = name;
       existingUser.password = password; // Triggers pre-save hashing
       existingUser.role = role;
+      if (role === "student") existingUser.rollNumber = normalizedRoll; // 🟢 NEW
       existingUser.otp = otp;
       existingUser.otpExpires = otpExpires;
       await existingUser.save();
@@ -72,6 +96,7 @@ export const registerUser = async (req, res) => {
       email: normalizedEmail, // Ensure database records stay purely lowercase
       password,
       role,
+      rollNumber: role === "student" ? normalizedRoll : null, // 🟢 NEW
       otp,
       otpExpires,
     });
@@ -115,6 +140,7 @@ export const verifyOTP = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        rollNumber: user.rollNumber, // 🟢 NEW: so the frontend has it immediately after login
       },
     });
   } catch (error) {
@@ -129,8 +155,6 @@ export const loginUser = async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // 🧹 FIX: Injected error variable removed completely so production traffic flows smoothly!
-
     const user = await User.findOne({ email: email.toLowerCase() });
     if (!user)
       return res.status(401).json({ message: "Invalid email or password." });
@@ -153,6 +177,7 @@ export const loginUser = async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        rollNumber: user.rollNumber, // 🟢 NEW
       },
     });
   } catch (error) {
@@ -250,6 +275,54 @@ export const resetPassword = async (req, res) => {
   } catch (error) {
     res.status(500).json({
       message: "Password adjustment pipeline crash.",
+      error: error.message,
+    });
+  }
+};
+
+// 6. 🟢 NEW: SELF-SERVICE ROLL NUMBER BACKFILL (Migration helper)
+// For students who registered before the rollNumber field existed. Lets a logged-in
+// student set (or correct, if empty) their own roll number once. Wire this into
+// Account.jsx as a small form when rollNumber is missing — or a teacher can set it
+// manually on the roster once ClassDetail.jsx supports it.
+export const updateOwnRollNumber = async (req, res) => {
+  const { rollNumber } = req.body;
+
+  try {
+    if (req.user.role !== "student") {
+      return res.status(400).json({
+        message: "Only student accounts have a roll number.",
+      });
+    }
+
+    const normalizedRoll = (rollNumber || "").trim().toUpperCase();
+    if (!normalizedRoll) {
+      return res.status(400).json({ message: "Roll number cannot be empty." });
+    }
+    if (!isPlausibleRollNumber(normalizedRoll)) {
+      return res.status(400).json({
+        message:
+          "Roll number format looks invalid. Expected something like 24102B0011.",
+      });
+    }
+
+    const user = await User.findById(req.user._id);
+    user.rollNumber = normalizedRoll;
+    await user.save();
+
+    res.status(200).json({
+      message: "Roll number updated successfully.",
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        rollNumber: user.rollNumber,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to update roll number.",
       error: error.message,
     });
   }

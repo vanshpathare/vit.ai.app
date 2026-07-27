@@ -9,7 +9,8 @@ import {
   toggleResultPublishAPI,
 } from "../../services/api";
 import AssignmentEditorModal from "../../components/teacher/AssignmentEditorModal";
-import { getInitials } from "../../utils/getInitials"; // 🟢 NEW: proper first+last initials for student avatars
+import { getInitials } from "../../utils/getInitials";
+import { compareRollNumbers } from "../../utils/rollNumberSort"; // 🟢 NEW
 
 function SubmissionTracker() {
   const { assignmentId } = useParams();
@@ -64,9 +65,11 @@ function SubmissionTracker() {
     }
   };
 
-  // 🟢 NEW: Sort the roster alphabetically by name before merging in submission data
+  // 🔧 FIXED: was sorting alphabetically by name — this was silently overriding the
+  // correct roll-number order the backend already returns. Now sorts by roll number
+  // (rule a: year, rule b: division letter A<B<C, rule c: serial number ascending).
   const sortedRoster = [...roster].sort((a, b) =>
-    (a.name || "").localeCompare(b.name || ""),
+    compareRollNumbers(a.rollNumber, b.rollNumber),
   );
 
   const mergedRows = sortedRoster.map((student) => {
@@ -76,8 +79,8 @@ function SubmissionTracker() {
     return { student, submission };
   });
 
-  // 🟢 NEW: Resolves the score to display inline on a row — the teacher's manual
-  // override when one exists, otherwise the AI-given score.
+  // Resolves the score to display inline on a row — the teacher's manual override
+  // when one exists, otherwise the AI-given score.
   const getDisplayScore = (submission) => {
     if (!submission) return null;
     if (
@@ -256,7 +259,11 @@ function SubmissionTracker() {
                     {getInitials(student.name, "ST")}
                   </div>
                   <div className="min-w-0">
+                    {/* 🟢 NEW: Roll number shown before the name */}
                     <p className="text-sm font-bold text-slate-800 truncate">
+                      <span className="font-mono text-indigo-600 mr-1.5">
+                        {student.rollNumber || "—"}
+                      </span>
                       {student.name}
                     </p>
                     <p className="text-xs text-slate-400 truncate">

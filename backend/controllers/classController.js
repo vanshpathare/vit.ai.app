@@ -1,6 +1,7 @@
 import Classroom from "../models/Classroom.js";
 import Assignment from "../models/Assignment.js";
 import Submission from "../models/Submission.js";
+import { sortStudentsByRollNumber } from "../utils/rollNumberSort.js"; // NEW
 
 // 1. CREATE NEW CLASSROOM (Teacher Only)
 export const createClassroom = async (req, res) => {
@@ -102,17 +103,27 @@ export const getUserClassrooms = async (req, res) => {
 };
 
 // 4. FETCH SINGLE CLASSROOM DETAILS & FULL ROSTER
+// 🟢 UPDATED: studentsEnrolled now also carries rollNumber, and the roster is sorted
+// by roll number (rule a → year, rule b → division letter, rule c → serial number)
+// instead of the previous alphabetical-by-name order. Every page that renders this
+// roster (Students tab, Submission Tracker rows) inherits this order automatically
+// since they all read from this same endpoint.
 export const getClassroomDetails = async (req, res) => {
   try {
     const classroom = await Classroom.findById(req.params.id)
-      .populate("studentsEnrolled", "name email") // Replaces student ObjectIds with real names and emails
+      .populate("studentsEnrolled", "name email rollNumber")
       .populate("teacherId", "name email");
 
     if (!classroom) {
       return res.status(404).json({ message: "Classroom target not found." });
     }
 
-    res.status(200).json(classroom);
+    const classroomObj = classroom.toObject();
+    classroomObj.studentsEnrolled = sortStudentsByRollNumber(
+      classroomObj.studentsEnrolled,
+    );
+
+    res.status(200).json(classroomObj);
   } catch (error) {
     res.status(500).json({
       message: "Failed to gather structural detail payload.",
@@ -121,17 +132,15 @@ export const getClassroomDetails = async (req, res) => {
   }
 };
 
-// 5. 🟢 NEW: GENERATE GRADEBOOK DATA FOR EXCEL EXPORT (Teacher Only)
-// Returns the classroom roster (already alphabetically sorted by name), every
-// assignment created in this classroom, and every *submitted* grade. The frontend
-// uses the teacher's manual override when present and falls back to the AI-given
-// score otherwise, then builds the .xlsx file client-side.
+// 5. GENERATE GRADEBOOK DATA FOR EXCEL EXPORT (Teacher Only)
+// 🟢 UPDATED: roster now sorted by roll number instead of alphabetically by name,
+// and rollNumber is included so the frontend can put it in its own Excel column.
 export const getClassGradebook = async (req, res) => {
   try {
     const classroom = await Classroom.findOne({
       _id: req.params.id,
       teacherId: req.user._id,
-    }).populate("studentsEnrolled", "name email");
+    }).populate("studentsEnrolled", "name email rollNumber");
 
     if (!classroom) {
       return res.status(403).json({
@@ -149,10 +158,8 @@ export const getClassGradebook = async (req, res) => {
       status: "submitted",
     }).select("assignmentId studentId aiEvaluation finalScoreOverride");
 
-    // Sort the roster alphabetically by name before sending it back
-    const sortedStudents = [...classroom.studentsEnrolled].sort((a, b) =>
-      (a.name || "").localeCompare(b.name || ""),
-    );
+    // 🔧 FIXED: sort by roll number instead of name.localeCompare
+    const sortedStudents = sortStudentsByRollNumber(classroom.studentsEnrolled);
 
     res.status(200).json({
       classroomName: classroom.name,

@@ -21,6 +21,24 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
+    // 🟢 NEW: Roll number — required for students, left null for teachers (who don't
+    // have one). Stored uppercase/trimmed so sorting/comparison is always consistent
+    // regardless of how the student typed it in.
+    //
+    // ⚠️ IMPORTANT: presence is enforced in authController.registerUser (for NEW
+    // registrations only), NOT here at the schema level. Your students who already
+    // registered before this field existed have no rollNumber in their document —
+    // if this were schema-required, the next time Mongoose re-saves any of those
+    // documents (e.g. resetPassword calling user.save()), validation would throw and
+    // break password resets for every existing student until they somehow get a
+    // roll number backfilled. See the migration note below.
+    rollNumber: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: null,
+    },
+
     // 2. Access Control Layer
     role: {
       type: String,
