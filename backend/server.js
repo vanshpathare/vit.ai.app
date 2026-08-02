@@ -8,6 +8,8 @@ import authRoutes from "./routes/authRoutes.js";
 import classRoutes from "./routes/classRoutes.js";
 import assignRoutes from "./routes/assignRoutes.js";
 import submitRoutes from "./routes/submitRoutes.js";
+import storageRoutes from "./routes/storageRoutes.js";
+import resourceRoutes from "./routes/resourceRoutes.js";
 
 dotenv.config();
 
@@ -49,10 +51,12 @@ app.use("/api/auth", authRoutes);
 app.use("/api/class", classRoutes);
 app.use("/api/assignments", assignRoutes);
 app.use("/api/submissions", submitRoutes);
+app.use("/api/storage", storageRoutes);
+app.use("/api/resources", resourceRoutes);
 
 // Basic Route for testing
 app.get("/", (req, res) => {
-  res.send("🚀 LangAI Backend API is running smoothly!");
+  res.send("🚀 AssignBuddy Backend API is running smoothly!");
 });
 
 const PORT = process.env.PORT || 5001;

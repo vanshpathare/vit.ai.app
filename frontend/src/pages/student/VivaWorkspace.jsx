@@ -484,9 +484,9 @@ function VivaWorkspace() {
               {submission.assignmentId?.title ||
                 "Conversational Viva Voice Room"}
             </h1>
-            <p className="text-xs text-slate-400 font-medium tracking-wide font-mono">
+            {/* <p className="text-xs text-slate-400 font-medium tracking-wide font-mono">
               ACTIVE SUBMISSION ID TRACE: {id}
-            </p>
+            </p> */}
           </div>
           <div className="shrink-0">
             {isSubmitted ? (
@@ -557,6 +557,22 @@ function VivaWorkspace() {
                         strictly tracked.
                       </p>
                     </div>
+
+                    {/* 🟢 NEW: Teacher's dos/don'ts — shown before the student starts the room */}
+                    {submission.assignmentId?.instructions && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-left flex items-start gap-3">
+                        <span className="text-xl shrink-0 select-none">📋</span>
+                        <div className="space-y-1">
+                          <h4 className="text-sm font-bold text-amber-800">
+                            Instructions from your instructor
+                          </h4>
+                          <p className="text-xs text-amber-700 whitespace-pre-wrap leading-relaxed">
+                            {submission.assignmentId.instructions}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
                     <button
                       onClick={enterRoom}
                       className="w-full py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm rounded-xl transition-all shadow-md tracking-wide"

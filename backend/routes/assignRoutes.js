@@ -20,7 +20,7 @@ router.use(protect);
 router.get("/class/:classId", getClassAssignments);
 
 // 2. Deploy a brand new assignment pool (Strictly Teacher role accounts)
-router.post("/create", teacherOnly, createAssignment);
+router.post("/create", teacherOnly, upload.array("files"), createAssignment);
 
 // 3. Start/Get a student test session (Picks and locks a random question from the pool)
 router.post("/initialize", initializeOrGetSubmission);
@@ -29,7 +29,12 @@ router.post("/initialize", initializeOrGetSubmission);
 router.put("/:id/publish", teacherOnly, toggleResultPublish);
 
 // 5. Update assignment settings (Strictly Teacher role accounts)
-router.put("/:id", teacherOnly, updateAssignmentSettings);
+router.put(
+  "/:id",
+  teacherOnly,
+  upload.array("files"),
+  updateAssignmentSettings,
+);
 
 // 6. Generate a raw question pool out of uploaded text documents in memory
 router.post(

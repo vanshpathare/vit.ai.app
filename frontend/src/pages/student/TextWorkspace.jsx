@@ -359,6 +359,21 @@ function TextWorkspace() {
               Response Details
             </h3>
 
+            {/* 🟢 NEW: Teacher's dos/don'ts, shown only while the student is actively attempting */}
+            {submission.assignmentId?.instructions && (
+              <div className="w-full bg-amber-50 border border-amber-200 rounded-xl p-4 sm:p-5 flex items-start gap-3">
+                <span className="text-xl shrink-0 select-none">📋</span>
+                <div className="space-y-1">
+                  <h4 className="text-sm font-bold text-amber-800">
+                    Instructions
+                  </h4>
+                  <p className="text-xs sm:text-sm text-amber-700 whitespace-pre-wrap leading-relaxed">
+                    {submission.assignmentId.instructions}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {isSubmitted ? (
               // 📝 VIEW MODE: Displaying previously submitted responses
               submission.responses && submission.responses.length > 0 ? (

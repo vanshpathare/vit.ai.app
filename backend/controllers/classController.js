@@ -1,27 +1,29 @@
 import Classroom from "../models/Classroom.js";
 import Assignment from "../models/Assignment.js";
 import Submission from "../models/Submission.js";
-import { sortStudentsByRollNumber } from "../utils/rollNumberSort.js"; // NEW
+import { sortStudentsByRollNumber } from "../utils/rollNumberSort.js";
 
 // 1. CREATE NEW CLASSROOM (Teacher Only)
+// 🟢 UPDATED: now accepts subjectIcon (which image/gradient key the teacher picked
+// for this classroom's card). Defaults to "general" if omitted so old client builds
+// that don't send it yet won't break.
 export const createClassroom = async (req, res) => {
-  const { name, description } = req.body;
+  const { name, description, subjectIcon } = req.body;
 
   try {
     let isUnique = false;
     let classCode = "";
 
-    // Loop runs until an absolutely unique 6-character alphanumeric code is found
     while (!isUnique) {
       classCode = Math.random().toString(36).substring(2, 8).toUpperCase();
       const existingClass = await Classroom.findOne({ classCode });
       if (!existingClass) isUnique = true;
     }
 
-    // req.user._id is attached automatically by our protect middleware
     const newClass = await Classroom.create({
       name,
       description,
+      subjectIcon: subjectIcon || "general", // 🟢 NEW
       teacherId: req.user._id,
       classCode,
     });
@@ -57,14 +59,12 @@ export const joinClassroom = async (req, res) => {
         .json({ message: "Invalid classroom code. Check input values." });
     }
 
-    // Prevent duplicate enrollment in the same roster array
     if (classroom.studentsEnrolled.includes(req.user._id)) {
       return res.status(400).json({
         message: "You are already registered inside this classroom roster.",
       });
     }
 
-    // Add student ID to the array and commit changes
     classroom.studentsEnrolled.push(req.user._id);
     await classroom.save();
 
@@ -85,13 +85,12 @@ export const getUserClassrooms = async (req, res) => {
   try {
     let classrooms;
 
-    // Smart routing filter based on the token's authenticated user role
     if (req.user.role === "teacher") {
       classrooms = await Classroom.find({ teacherId: req.user._id });
     } else {
       classrooms = await Classroom.find({
         studentsEnrolled: req.user._id,
-      }).populate("teacherId", "name email"); // Merges teacher metadata inline automatically
+      }).populate("teacherId", "name email");
     }
 
     res.status(200).json(classrooms);
@@ -103,11 +102,6 @@ export const getUserClassrooms = async (req, res) => {
 };
 
 // 4. FETCH SINGLE CLASSROOM DETAILS & FULL ROSTER
-// 🟢 UPDATED: studentsEnrolled now also carries rollNumber, and the roster is sorted
-// by roll number (rule a → year, rule b → division letter, rule c → serial number)
-// instead of the previous alphabetical-by-name order. Every page that renders this
-// roster (Students tab, Submission Tracker rows) inherits this order automatically
-// since they all read from this same endpoint.
 export const getClassroomDetails = async (req, res) => {
   try {
     const classroom = await Classroom.findById(req.params.id)
@@ -133,8 +127,6 @@ export const getClassroomDetails = async (req, res) => {
 };
 
 // 5. GENERATE GRADEBOOK DATA FOR EXCEL EXPORT (Teacher Only)
-// 🟢 UPDATED: roster now sorted by roll number instead of alphabetically by name,
-// and rollNumber is included so the frontend can put it in its own Excel column.
 export const getClassGradebook = async (req, res) => {
   try {
     const classroom = await Classroom.findOne({
@@ -158,7 +150,6 @@ export const getClassGradebook = async (req, res) => {
       status: "submitted",
     }).select("assignmentId studentId aiEvaluation finalScoreOverride");
 
-    // 🔧 FIXED: sort by roll number instead of name.localeCompare
     const sortedStudents = sortStudentsByRollNumber(classroom.studentsEnrolled);
 
     res.status(200).json({

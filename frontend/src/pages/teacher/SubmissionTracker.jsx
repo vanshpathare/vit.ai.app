@@ -11,6 +11,23 @@ import {
 import AssignmentEditorModal from "../../components/teacher/AssignmentEditorModal";
 import { getInitials } from "../../utils/getInitials";
 import { compareRollNumbers } from "../../utils/rollNumberSort"; // 🟢 NEW
+import { Video, Folder, FileText } from "lucide-react";
+import { getPreviewUrl } from "../../utils/getPreviewUrl";
+import DocxViewerModal from "../../components/DocxViewerModal";
+
+const getAttachmentIcon = (fileType, url) => {
+  if (
+    fileType === "youtube" ||
+    url?.includes("youtube") ||
+    url?.includes("youtu.be")
+  ) {
+    return <Video className="w-3.5 h-3.5 text-red-600 shrink-0" />;
+  }
+  if (fileType === "drive" || url?.includes("drive.google.com")) {
+    return <Folder className="w-3.5 h-3.5 text-amber-500 shrink-0" />;
+  }
+  return <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />;
+};
 
 function SubmissionTracker() {
   const { assignmentId } = useParams();
@@ -128,7 +145,7 @@ function SubmissionTracker() {
   }
 
   return (
-    <div className="w-full px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6">
+    <div className="w-full px-4 sm:px-6 lg:px-8 py-3 sm:py-4 space-y-4">
       {/* Header */}
       <div className="flex items-start sm:items-center justify-between gap-3 flex-col sm:flex-row">
         <div className="flex items-start gap-3 min-w-0">
@@ -191,6 +208,66 @@ function SubmissionTracker() {
         </div>
       </div>
 
+      {/* INSTRUCTIONS SECTION (If Present) */}
+      {/* 🟢 RESPONSIVE CONTAINER: Grid handles side-by-side on lg and tight stacking on small screens */}
+      {((assignment.instructions && assignment.instructions.trim() !== "") ||
+        (assignment.attachments && assignment.attachments.length > 0)) && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 sm:gap-3 lg:gap-4 items-stretch">
+          {/* 1. INSTRUCTIONS BLOCK */}
+          {assignment.instructions && assignment.instructions.trim() !== "" && (
+            <div
+              className={`bg-amber-50/60 border border-amber-200 rounded-xl p-4 sm:p-5 flex flex-col justify-between space-y-2 shadow-sm ${
+                !assignment.attachments || assignment.attachments.length === 0
+                  ? "lg:col-span-2" // 🟢 Spans full width on lg if no attachments exist
+                  : ""
+              }`}
+            >
+              <div className="space-y-1.5">
+                <h3 className="text-xs font-black text-amber-800 uppercase tracking-wider flex items-center gap-1.5">
+                  📋 Instructions for Students
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
+                  {assignment.instructions}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* 2. ATTACHED REFERENCE FILES & LINKS BLOCK */}
+          {assignment.attachments && assignment.attachments.length > 0 && (
+            <div
+              className={`bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col space-y-1 shadow-sm ${
+                !assignment.instructions ||
+                assignment.instructions.trim() === ""
+                  ? "lg:col-span-2" // 🟢 Spans full width on lg if no instructions exist
+                  : ""
+              }`}
+            >
+              <h3 className="text-xs font-black text-slate-600 uppercase tracking-wider flex items-center gap-1.5 shrink-0">
+                📁 Attached Reference Files ({assignment.attachments.length})
+              </h3>
+              <div className="flex flex-wrap gap-2 items-start content-start flex-1">
+                {assignment.attachments.map((att, idx) => (
+                  <button
+                    key={att._id || idx}
+                    onClick={() => handleFileClick(att)}
+                    className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 rounded-xl text-xs font-bold text-slate-700 hover:text-indigo-600 transition-all max-w-full min-w-0 shrink-0 shadow-sm"
+                  >
+                    {getAttachmentIcon(att.fileType, att.url)}
+                    <span className="truncate min-w-0 max-w-[180px] sm:max-w-xs">
+                      {att.fileName || att.title || "Attachment"}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-normal shrink-0">
+                      ↗
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Question Pool Preview */}
       <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 space-y-3 shadow-sm">
         <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">
@@ -226,8 +303,8 @@ function SubmissionTracker() {
             onClick={() => setFilter(tab.key)}
             className={`flex-1 sm:flex-none text-center px-4 py-2 text-xs sm:text-sm font-bold rounded-md transition-all ${
               filter === tab.key
-                ? "bg-white text-indigo-600 shadow-sm"
-                : "text-slate-500 hover:text-slate-800"
+                ? "bg-white text-amber-600 shadow-sm"
+                : "text-slate-500 hover:text-amber-500"
             }`}
           >
             {tab.label}
@@ -255,13 +332,13 @@ function SubmissionTracker() {
                 }`}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-600 font-bold text-xs flex items-center justify-center shrink-0 uppercase">
+                  <div className="w-9 h-9 rounded-full bg-indigo-100 text-amber-600 font-bold text-xs flex items-center justify-center shrink-0 uppercase">
                     {getInitials(student.name, "ST")}
                   </div>
                   <div className="min-w-0">
                     {/* 🟢 NEW: Roll number shown before the name */}
                     <p className="text-sm font-bold text-slate-800 truncate">
-                      <span className="font-mono text-indigo-600 mr-1.5">
+                      <span className="font-mono text-amber-600 mr-1.5">
                         {student.rollNumber || "—"}
                       </span>
                       {student.name}

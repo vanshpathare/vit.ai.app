@@ -56,20 +56,43 @@ export const getClassAssignmentsAPI = (classId) =>
 export const initializeSubmissionAPI = (assignmentId) =>
   API.post("/assignments/initialize", { assignmentId });
 // 🟢 Teacher creates a new assignment for a classroom
-export const createAssignmentAPI = (data) =>
-  API.post("/assignments/create", data);
+// export const createAssignmentAPI = (data) =>
+//   API.post("/assignments/create", data);
+export const createAssignmentAPI = (formData) =>
+  API.post("/assignments/create", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
 // 🟢 Fetch full detail (question pool, criteria, classId) for one assignment
 export const getAssignmentByIdAPI = (assignmentId) =>
   API.get(`/assignments/${assignmentId}`);
 // 🟢 Update any subset of an assignment's settings/questions/criteria
+// export const updateAssignmentAPI = (assignmentId, data) =>
+//   API.put(`/assignments/${assignmentId}`, data);
 export const updateAssignmentAPI = (assignmentId, data) =>
-  API.put(`/assignments/${assignmentId}`, data);
+  API.put(`/assignments/${assignmentId}`, data, {
+    headers: {
+      "Content-Type": "multipart/form-data",
+    },
+  });
 // 🟢 Toggle whether students can see their numeric grades yet
 export const toggleResultPublishAPI = (assignmentId, isResultPublished) =>
   API.put(`/assignments/${assignmentId}/publish`, { isResultPublished });
 // 🟢 Upload a reference document and let Gemini draft a question pool from it
 export const generateQuestionsFromMaterialAPI = (formData) =>
   API.post("/assignments/generate-from-material", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+
+export const getClassroomResourcesAPI = (classId) =>
+  API.get(`/resources/classroom/${classId}`);
+export const createClassroomResourceAPI = (classId, formData) =>
+  API.post(`/resources/classroom/${classId}`, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+export const deleteResourceAPI = (resourceId) =>
+  API.delete(`/resources/${resourceId}`);
+export const uploadStorageFileAPI = (formData) =>
+  API.post("/storage/upload-resource", formData, {
     headers: { "Content-Type": "multipart/form-data" },
   });
 

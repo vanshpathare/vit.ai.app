@@ -5,30 +5,175 @@ import Submission from "../models/Submission.js";
 import Classroom from "../models/Classroom.js";
 import { generateQuestionsFromMaterial } from "../services/geminiService.js";
 import { createRequire } from "module";
+import { deleteFromSupabase } from "../services/storageService.js";
+import { uploadToSupabase } from "../services/storageService.js";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import mammoth from "mammoth";
 import PDFParser from "pdf2json";
 
 // 1. CREATE AND BULK-DISTRIBUTE ASSIGNMENT (Teacher Only - Push Architecture)
-export const createAssignment = async (req, res) => {
-  const {
-    classId,
-    title,
-    questionPool,
-    questionsPerStudent,
-    modality,
-    totalMarks,
-    evaluationCriteria,
-    aiNotes,
-    dueDate,
-    distributionType,
-    isResultPublished,
-    allowMultipleSubmissions,
-  } = req.body;
+// export const createAssignment = async (req, res) => {
+//   const {
+//     classId,
+//     title,
+//     questionPool,
+//     questionsPerStudent,
+//     modality,
+//     totalMarks,
+//     evaluationCriteria,
+//     aiNotes,
+//     instructions,
+//     dueDate,
+//     distributionType,
+//     isResultPublished,
+//     allowMultipleSubmissions,
+//   } = req.body;
 
+//   try {
+//     // 🔒 OWNERSHIP GUARDRAIL: Confirm classroom belongs to the teacher making the request
+//     const classroom = await Classroom.findOne({
+//       _id: classId,
+//       teacherId: req.user._id,
+//     });
+
+//     if (!classroom) {
+//       return res.status(403).json({
+//         message:
+//           "Unauthorized action. You are not authorized to deploy assignments to this classroom.",
+//       });
+//     }
+
+//     // Validation check for the question pool array
+//     if (
+//       !questionPool ||
+//       !Array.isArray(questionPool) ||
+//       questionPool.length === 0
+//     ) {
+//       return res
+//         .status(400)
+//         .json({ message: "Assignment requires a valid question pool array." });
+//     }
+
+//     const countPerStudent = parseInt(questionsPerStudent) || 1;
+
+//     // A. Provision and save the Master Assignment Blueprint
+//     const assignment = await Assignment.create({
+//       classId,
+//       title,
+//       questionPool,
+//       questionsPerStudent: countPerStudent,
+//       modality,
+//       totalMarks,
+//       evaluationCriteria,
+//       aiNotes,
+//       instructions: instructions || "",
+//       dueDate,
+//       distributionType: distributionType || "same-for-all",
+//       isResultPublished: isResultPublished ?? false,
+//       allowMultipleSubmissions: allowMultipleSubmissions ?? false,
+//     });
+
+//     // ⚡ B. AUTOMATED BULK DISTRIBUTION PIPELINE (Optimized Bulk Push Model)
+//     if (classroom.studentsEnrolled && classroom.studentsEnrolled.length > 0) {
+//       // Pre-calculate a uniform question IF the teacher chose "same-for-all"
+
+//       const uniformQuestion = [...questionPool];
+
+//       // Prepare an array of raw document objects in memory
+//       const submissionDocs = classroom.studentsEnrolled.map((studentId) => {
+//         let assignedQuestionsArray = [];
+
+//         if (distributionType === "same-for-all") {
+//           assignedQuestionsArray = uniformQuestion; // Everyone gets the exact same question
+//         } else {
+//           // "random": Shuffle the pool uniquely for this student and slice out the requested amount
+//           const shuffledPool = [...questionPool].sort(
+//             () => 0.5 - Math.random(),
+//           );
+//           assignedQuestionsArray = shuffledPool.slice(
+//             0,
+//             Math.min(countPerStudent, questionPool.length),
+//           );
+//         }
+
+//         return {
+//           assignmentId: assignment._id,
+//           studentId: studentId,
+//           assignedQuestions: assignedQuestionsArray,
+//           status: "pending",
+//           tabSwitchCount: 0,
+//         };
+//       });
+
+//       // 🏎️ Bulk insert all rows at once! 1 single connection, 1 single trip to MongoDB.
+//       await Submission.insertMany(submissionDocs);
+//     }
+
+//     res.status(201).json({
+//       message:
+//         "Assignment successfully deployed and pushed to all active student rosters.",
+//       assignment,
+//     });
+//   } catch (error) {
+//     console.error("❌ Assignment deployment failure:", error);
+//     res.status(500).json({
+//       message: "Assignment deployment and broadcast pipeline failed.",
+//       error: error.message,
+//     });
+//   }
+// };
+
+export const createAssignment = async (req, res) => {
   try {
-    // 🔒 OWNERSHIP GUARDRAIL: Confirm classroom belongs to the teacher making the request
+    const {
+      classId,
+      title,
+      modality,
+      dueDate,
+      totalMarks,
+      aiNotes,
+      instructions,
+      distributionType,
+      questionsPerStudent,
+      isResultPublished,
+      allowMultipleSubmissions,
+    } = req.body;
+
+    // 🟢 1. PARSE JSON STRINGS FROM FORMDATA
+    let parsedQuestionPool = [];
+    let parsedEvaluationCriteria = {};
+    let parsedExistingAttachments = [];
+    let parsedNewLinks = [];
+
+    try {
+      parsedQuestionPool =
+        typeof req.body.questionPool === "string"
+          ? JSON.parse(req.body.questionPool)
+          : req.body.questionPool || [];
+
+      parsedEvaluationCriteria =
+        typeof req.body.evaluationCriteria === "string"
+          ? JSON.parse(req.body.evaluationCriteria)
+          : req.body.evaluationCriteria || {};
+
+      parsedExistingAttachments =
+        typeof req.body.existingAttachments === "string"
+          ? JSON.parse(req.body.existingAttachments)
+          : req.body.existingAttachments || [];
+
+      parsedNewLinks =
+        typeof req.body.newLinks === "string"
+          ? JSON.parse(req.body.newLinks)
+          : req.body.newLinks || [];
+    } catch (parseErr) {
+      console.error("❌ JSON Parse error in createAssignment:", parseErr);
+      return res
+        .status(400)
+        .json({ message: "Invalid payload format for complex fields." });
+    }
+
+    // 🔒 2. OWNERSHIP GUARDRAIL
     const classroom = await Classroom.findOne({
       _id: classId,
       teacherId: req.user._id,
@@ -41,11 +186,11 @@ export const createAssignment = async (req, res) => {
       });
     }
 
-    // Validation check for the question pool array
+    // 🟢 3. VALIDATION CHECK
     if (
-      !questionPool ||
-      !Array.isArray(questionPool) ||
-      questionPool.length === 0
+      !parsedQuestionPool ||
+      !Array.isArray(parsedQuestionPool) ||
+      parsedQuestionPool.length === 0
     ) {
       return res
         .status(400)
@@ -54,42 +199,78 @@ export const createAssignment = async (req, res) => {
 
     const countPerStudent = parseInt(questionsPerStudent) || 1;
 
-    // A. Provision and save the Master Assignment Blueprint
+    // 🟢 4. ATTACHMENT PROCESSING PIPELINE
+    const fileAttachments = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        // Upload binary buffer to Supabase / cloud storage
+        const uploadResult = await uploadToSupabase(file, file.originalname);
+        const fileUrl = uploadResult?.fileUrl || uploadResult;
+
+        fileAttachments.push({
+          resourceType: "file",
+          url: fileUrl,
+          fileName: file.originalname,
+          fileType: file.originalname.split(".").pop()?.toLowerCase() || "file",
+        });
+      }
+    }
+
+    // Convert links into schema attachment shape
+    const formattedLinks = parsedNewLinks.map((link) => ({
+      resourceType: "link",
+      url: link.url,
+      fileName: link.title || link.url,
+      fileType:
+        link.url.includes("youtube.com") || link.url.includes("youtu.be")
+          ? "youtube"
+          : "drive",
+    }));
+
+    // Merge existing, new links, and newly uploaded files
+    const finalAttachments = [
+      ...parsedExistingAttachments,
+      ...formattedLinks,
+      ...fileAttachments,
+    ];
+
+    // 🟢 5. CREATE MASTER ASSIGNMENT
     const assignment = await Assignment.create({
       classId,
       title,
-      questionPool,
+      questionPool: parsedQuestionPool,
       questionsPerStudent: countPerStudent,
       modality,
-      totalMarks,
-      evaluationCriteria,
-      aiNotes,
-      dueDate,
+      totalMarks: parseFloat(totalMarks) || 0,
+      evaluationCriteria: parsedEvaluationCriteria,
+      aiNotes: aiNotes || "",
+      instructions: instructions || "",
+      attachments: finalAttachments,
+      dueDate: dueDate ? new Date(dueDate) : undefined,
       distributionType: distributionType || "same-for-all",
-      isResultPublished: isResultPublished ?? false,
-      allowMultipleSubmissions: allowMultipleSubmissions ?? false,
+      isResultPublished:
+        isResultPublished === "true" || isResultPublished === true,
+      allowMultipleSubmissions:
+        allowMultipleSubmissions === "true" ||
+        allowMultipleSubmissions === true,
     });
 
-    // ⚡ B. AUTOMATED BULK DISTRIBUTION PIPELINE (Optimized Bulk Push Model)
+    // 🏎️ 6. AUTOMATED BULK DISTRIBUTION PIPELINE
     if (classroom.studentsEnrolled && classroom.studentsEnrolled.length > 0) {
-      // Pre-calculate a uniform question IF the teacher chose "same-for-all"
+      const uniformQuestion = [...parsedQuestionPool];
 
-      const uniformQuestion = [...questionPool];
-
-      // Prepare an array of raw document objects in memory
       const submissionDocs = classroom.studentsEnrolled.map((studentId) => {
         let assignedQuestionsArray = [];
 
         if (distributionType === "same-for-all") {
-          assignedQuestionsArray = uniformQuestion; // Everyone gets the exact same question
+          assignedQuestionsArray = uniformQuestion;
         } else {
-          // "random": Shuffle the pool uniquely for this student and slice out the requested amount
-          const shuffledPool = [...questionPool].sort(
+          const shuffledPool = [...parsedQuestionPool].sort(
             () => 0.5 - Math.random(),
           );
           assignedQuestionsArray = shuffledPool.slice(
             0,
-            Math.min(countPerStudent, questionPool.length),
+            Math.min(countPerStudent, parsedQuestionPool.length),
           );
         }
 
@@ -102,18 +283,17 @@ export const createAssignment = async (req, res) => {
         };
       });
 
-      // 🏎️ Bulk insert all rows at once! 1 single connection, 1 single trip to MongoDB.
       await Submission.insertMany(submissionDocs);
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       message:
         "Assignment successfully deployed and pushed to all active student rosters.",
       assignment,
     });
   } catch (error) {
     console.error("❌ Assignment deployment failure:", error);
-    res.status(500).json({
+    return res.status(500).json({
       message: "Assignment deployment and broadcast pipeline failed.",
       error: error.message,
     });
@@ -289,33 +469,180 @@ export const toggleResultPublish = async (req, res) => {
 };
 
 // 5. UPDATE ASSIGNMENT SETTINGS (Teacher Only)
+// export const updateAssignmentSettings = async (req, res) => {
+//   try {
+//     const assignment = await Assignment.findById(req.params.id);
+//     if (!assignment)
+//       return res.status(404).json({ message: "Assignment not found." });
+
+//     const classroom = await Classroom.findOne({
+//       _id: assignment.classId,
+//       teacherId: req.user._id,
+//     });
+//     if (!classroom)
+//       return res.status(403).json({ message: "Unauthorized action." });
+
+//     const updatedAssignment = await Assignment.findByIdAndUpdate(
+//       req.params.id,
+//       { $set: req.body },
+//       { new: true, runValidators: true },
+//     );
+
+//     res.status(200).json({
+//       message: "Assignment settings updated live.",
+//       assignment: updatedAssignment,
+//     });
+//   } catch (error) {
+//     res
+//       .status(500)
+//       .json({ message: "Failed to update settings.", error: error.message });
+//   }
+// };
 export const updateAssignmentSettings = async (req, res) => {
   try {
-    const assignment = await Assignment.findById(req.params.id);
-    if (!assignment)
-      return res.status(404).json({ message: "Assignment not found." });
+    const { id } = req.params;
 
+    // 1. Fetch assignment and check existence
+    const assignment = await Assignment.findById(id);
+    if (!assignment) {
+      return res.status(404).json({ message: "Assignment not found." });
+    }
+
+    // 2. Ownership Guardrail
     const classroom = await Classroom.findOne({
       _id: assignment.classId,
       teacherId: req.user._id,
     });
-    if (!classroom)
+    if (!classroom) {
       return res.status(403).json({ message: "Unauthorized action." });
+    }
 
-    const updatedAssignment = await Assignment.findByIdAndUpdate(
-      req.params.id,
-      { $set: req.body },
-      { new: true, runValidators: true },
-    );
+    // 🟢 3. PARSE STRINGIFIED FORMDATA FIELDS SAFELY
+    const {
+      title,
+      modality,
+      dueDate,
+      totalMarks,
+      aiNotes,
+      instructions,
+      distributionType,
+      questionsPerStudent,
+      isResultPublished,
+      allowMultipleSubmissions,
+    } = req.body;
 
-    res.status(200).json({
+    let parsedQuestionPool = assignment.questionPool;
+    let parsedEvaluationCriteria = assignment.evaluationCriteria;
+    let parsedExistingAttachments = [];
+    let parsedNewLinks = [];
+
+    if (req.body.questionPool) {
+      parsedQuestionPool =
+        typeof req.body.questionPool === "string"
+          ? JSON.parse(req.body.questionPool)
+          : req.body.questionPool;
+    }
+
+    if (req.body.evaluationCriteria) {
+      parsedEvaluationCriteria =
+        typeof req.body.evaluationCriteria === "string"
+          ? JSON.parse(req.body.evaluationCriteria)
+          : req.body.evaluationCriteria;
+    }
+
+    if (req.body.existingAttachments) {
+      parsedExistingAttachments =
+        typeof req.body.existingAttachments === "string"
+          ? JSON.parse(req.body.existingAttachments)
+          : req.body.existingAttachments;
+    }
+
+    if (req.body.newLinks) {
+      parsedNewLinks =
+        typeof req.body.newLinks === "string"
+          ? JSON.parse(req.body.newLinks)
+          : req.body.newLinks;
+    }
+
+    // 🟢 4. PROCESS NEW UPLOADED FILES (req.files from Multer)
+    const newFileAttachments = [];
+    if (req.files && req.files.length > 0) {
+      for (const file of req.files) {
+        const uploadResult = await uploadToSupabase(file, file.originalname);
+        const fileUrl = uploadResult?.fileUrl || uploadResult;
+
+        newFileAttachments.push({
+          resourceType: "file",
+          url: fileUrl,
+          fileName: file.originalname,
+          fileType: file.originalname.split(".").pop()?.toLowerCase() || "file",
+        });
+      }
+    }
+
+    // Format new text links
+    const formattedNewLinks = parsedNewLinks.map((link) => ({
+      resourceType: "link",
+      url: link.url,
+      fileName: link.title || link.url,
+      fileType:
+        link.url.includes("youtube.com") || link.url.includes("youtu.be")
+          ? "youtube"
+          : "drive",
+    }));
+
+    // Combine: Kept Attachments + New Links + Newly Uploaded Files
+    const finalAttachments = [
+      ...parsedExistingAttachments,
+      ...formattedNewLinks,
+      ...newFileAttachments,
+    ];
+
+    // 🟢 5. APPLY UPDATES TO ASSIGNMENT DOCUMENT
+    assignment.title = title !== undefined ? title.trim() : assignment.title;
+    assignment.modality = modality || assignment.modality;
+    assignment.dueDate = dueDate ? new Date(dueDate) : assignment.dueDate;
+    assignment.totalMarks =
+      totalMarks !== undefined ? parseFloat(totalMarks) : assignment.totalMarks;
+    assignment.aiNotes =
+      aiNotes !== undefined ? aiNotes.trim() : assignment.aiNotes;
+    assignment.instructions =
+      instructions !== undefined
+        ? instructions.trim()
+        : assignment.instructions;
+    assignment.distributionType =
+      distributionType || assignment.distributionType;
+    assignment.questionsPerStudent =
+      questionsPerStudent !== undefined
+        ? parseInt(questionsPerStudent)
+        : assignment.questionsPerStudent;
+
+    if (isResultPublished !== undefined) {
+      assignment.isResultPublished =
+        isResultPublished === "true" || isResultPublished === true;
+    }
+    if (allowMultipleSubmissions !== undefined) {
+      assignment.allowMultipleSubmissions =
+        allowMultipleSubmissions === "true" ||
+        allowMultipleSubmissions === true;
+    }
+
+    assignment.questionPool = parsedQuestionPool;
+    assignment.evaluationCriteria = parsedEvaluationCriteria;
+    assignment.attachments = finalAttachments;
+
+    const updatedAssignment = await assignment.save();
+
+    return res.status(200).json({
       message: "Assignment settings updated live.",
       assignment: updatedAssignment,
     });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Failed to update settings.", error: error.message });
+    console.error("❌ Failed to update assignment:", error);
+    return res.status(500).json({
+      message: "Failed to update settings.",
+      error: error.message,
+    });
   }
 };
 
@@ -417,5 +744,37 @@ export const getAssignmentById = async (req, res) => {
       message: "Failed to fetch assignment details.",
       error: error.message,
     });
+  }
+};
+
+export const deleteAssignment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const assignment = await Assignment.findById(id);
+
+    if (!assignment) {
+      return res.status(404).json({ message: "Assignment not found." });
+    }
+
+    // 1. Clean up all attached Supabase files for this assignment
+    if (assignment.attachments && assignment.attachments.length > 0) {
+      for (const attachment of assignment.attachments) {
+        if (attachment.resourceType === "file" && attachment.url) {
+          await deleteFromSupabase(attachment.url);
+        }
+      }
+    }
+
+    // 2. Delete the assignment from MongoDB
+    await Assignment.findByIdAndDelete(id);
+
+    return res
+      .status(200)
+      .json({ message: "Assignment and attached files deleted successfully." });
+  } catch (error) {
+    console.error("Error deleting assignment:", error);
+    return res
+      .status(500)
+      .json({ message: "Failed to delete assignment.", error: error.message });
   }
 };

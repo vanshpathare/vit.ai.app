@@ -12,6 +12,10 @@ const classroomSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    subjectIcon: {
+      type: String,
+      default: "general",
+    },
 
     // 2. Teacher Relationship (Foreign Key to User Model)
     teacherId: {

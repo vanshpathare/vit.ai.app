@@ -10,24 +10,27 @@ const storage = multer.memoryStorage();
  */
 const fileFilter = (req, file, cb) => {
   const isAudio = file.mimetype.startsWith("audio/");
+  const isImage = file.mimetype.startsWith("image/");
 
   // 📝 Extended Document Support Matrix
   const isSupportedDocument =
     file.mimetype === "text/plain" ||
     file.mimetype === "application/pdf" || // PDFs
+    file.mimetype === "application/msword" ||
     file.mimetype ===
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || //.docx
     file.originalname.endsWith(".txt") ||
     file.originalname.endsWith(".md") ||
     file.originalname.endsWith(".pdf") ||
+    file.originalname.endsWith(".doc") ||
     file.originalname.endsWith(".docx");
 
-  if (isAudio || isSupportedDocument) {
+  if (isAudio || isImage || isSupportedDocument) {
     cb(null, true);
   } else {
     cb(
       new Error(
-        "Security Block: Unsupported file format. Only audio files, PDFs, Word documents (.docx), or plain text are permitted!",
+        "Security Block: Unsupported file format. Only audio files, images, PDFs, Word documents (.docx), or plain text are permitted!",
       ),
       false,
     );

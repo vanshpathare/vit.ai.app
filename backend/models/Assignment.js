@@ -1,5 +1,27 @@
 import mongoose from "mongoose";
 
+const attachmentSchema = new mongoose.Schema({
+  resourceType: {
+    type: String,
+    enum: ["file", "link"],
+    required: true,
+    default: "file",
+  },
+  url: {
+    type: String,
+    required: [true, "Attachment URL or Link is required"],
+  },
+  fileName: {
+    type: String,
+    required: [true, "Attachment name is required"],
+    trim: true,
+  },
+  fileType: {
+    type: String, // e.g. "pdf", "docx", "drive", "youtube"
+    default: "file",
+  },
+});
+
 const assignmentSchema = new mongoose.Schema(
   {
     classId: {
@@ -38,16 +60,25 @@ const assignmentSchema = new mongoose.Schema(
     evaluationCriteria: {
       type: Map,
       of: Number,
-      default: function () {
-        // If totalMarks is provided during creation, it uses that; otherwise defaults to 20
-        return new Map([["Overall Performance", this.totalMarks || 20]]);
-      },
+      default: () => new Map(),
       required: true,
     },
     aiNotes: {
       type: String,
       trim: true,
     },
+    // 🟢 NEW: Teacher-written dos/don'ts shown to students before and during the
+    // assignment (e.g. "No outside references allowed", "Answer in full sentences").
+    // Distinct from `aiNotes`, which is grading guidance for the AI and is never
+    // shown to students.
+    instructions: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    attachments: [attachmentSchema],
+
     dueDate: {
       type: Date,
       required: true,
@@ -75,5 +106,14 @@ const assignmentSchema = new mongoose.Schema(
     timestamps: true,
   },
 );
+
+assignmentSchema.pre("save", function (next) {
+  if (!this.evaluationCriteria || this.evaluationCriteria.size === 0) {
+    this.evaluationCriteria = new Map([
+      ["Overall Performance", this.totalMarks || 20],
+    ]);
+  }
+  next();
+});
 
 export default mongoose.model("Assignment", assignmentSchema);

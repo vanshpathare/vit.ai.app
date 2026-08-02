@@ -39,6 +39,9 @@ function AssignmentEditorModal({
     existingAssignment?.totalMarks || 20,
   );
   const [aiNotes, setAiNotes] = useState(existingAssignment?.aiNotes || "");
+  const [instructions, setInstructions] = useState(
+    existingAssignment?.instructions || "",
+  );
   const [isResultPublished, setIsResultPublished] = useState(
     existingAssignment?.isResultPublished ?? false,
   );
@@ -51,6 +54,13 @@ function AssignmentEditorModal({
   const [questionsPerStudent, setQuestionsPerStudent] = useState(
     existingAssignment?.questionsPerStudent || 1,
   );
+  const [existingAttachments, setExistingAttachments] = useState(
+    existingAssignment?.attachments || [],
+  );
+  const [newFiles, setNewFiles] = useState([]); // List of File objects
+  const [newLinkUrl, setNewLinkUrl] = useState("");
+  const [newLinkTitle, setNewLinkTitle] = useState("");
+  const [newLinks, setNewLinks] = useState([]); // List of { url, title } objects
 
   const [criteria, setCriteria] = useState(() => {
     const raw = existingAssignment?.evaluationCriteria;
@@ -103,6 +113,38 @@ function AssignmentEditorModal({
     (sum, c) => sum + (parseFloat(c.marks) || 0),
     0,
   );
+
+  const handleRemoveExistingAttachment = (idx) => {
+    setExistingAttachments((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAddNewFiles = (e) => {
+    const selected = Array.from(e.target.files || []);
+    if (selected.length > 0) {
+      setNewFiles((prev) => [...prev, ...selected]);
+    }
+  };
+
+  const handleRemoveNewFile = (idx) => {
+    setNewFiles((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleAddLink = () => {
+    if (!newLinkUrl.trim()) return;
+    setNewLinks((prev) => [
+      ...prev,
+      {
+        url: newLinkUrl.trim(),
+        title: newLinkTitle.trim() || newLinkUrl.trim(),
+      },
+    ]);
+    setNewLinkUrl("");
+    setNewLinkTitle("");
+  };
+
+  const handleRemoveNewLink = (idx) => {
+    setNewLinks((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const handleGenerateFromMaterial = async () => {
     if (!materialFile) {
@@ -166,27 +208,52 @@ function AssignmentEditorModal({
       cleanCriteria.map((c) => [c.name.trim(), parseFloat(c.marks) || 0]),
     );
 
-    const payload = {
-      classId,
-      title: title.trim(),
-      questionPool: cleanQuestions,
-      questionsPerStudent: parseInt(questionsPerStudent) || 1,
-      modality,
-      totalMarks: parseFloat(totalMarks) || 0,
-      evaluationCriteria,
-      aiNotes: aiNotes.trim(),
-      dueDate: new Date(dueDate).toISOString(),
-      distributionType,
-      isResultPublished,
-      allowMultipleSubmissions,
-    };
+    // const payload = {
+    //   classId,
+    //   title: title.trim(),
+    //   questionPool: cleanQuestions,
+    //   questionsPerStudent: parseInt(questionsPerStudent) || 1,
+    //   modality,
+    //   totalMarks: parseFloat(totalMarks) || 0,
+    //   evaluationCriteria,
+    //   aiNotes: aiNotes.trim(),
+    //   instructions: instructions.trim(),
+    //   dueDate: new Date(dueDate).toISOString(),
+    //   distributionType,
+    //   isResultPublished,
+    //   allowMultipleSubmissions,
+    // };
+
+    const formData = new FormData();
+    formData.append("classId", classId);
+    formData.append("title", title.trim());
+    formData.append("modality", modality);
+    formData.append("dueDate", new Date(dueDate).toISOString());
+    formData.append("totalMarks", parseFloat(totalMarks) || 0);
+    formData.append("aiNotes", aiNotes.trim());
+    formData.append("instructions", instructions.trim());
+    formData.append("distributionType", distributionType);
+    formData.append("questionsPerStudent", parseInt(questionsPerStudent) || 1);
+    formData.append("isResultPublished", isResultPublished);
+    formData.append("allowMultipleSubmissions", allowMultipleSubmissions);
+
+    // Arrays & Objects as JSON strings for FormData parsing
+    formData.append("questionPool", JSON.stringify(cleanQuestions));
+    formData.append("evaluationCriteria", JSON.stringify(evaluationCriteria));
+    formData.append("existingAttachments", JSON.stringify(existingAttachments));
+    formData.append("newLinks", JSON.stringify(newLinks));
+
+    // Append raw files
+    newFiles.forEach((file) => {
+      formData.append("files", file);
+    });
 
     setIsSaving(true);
     try {
       if (isEditMode) {
-        await updateAssignmentAPI(existingAssignment._id, payload);
+        await updateAssignmentAPI(existingAssignment._id, formData);
       } else {
-        await createAssignmentAPI(payload);
+        await createAssignmentAPI(formData);
       }
       onSaved();
     } catch (err) {
@@ -330,6 +397,144 @@ function AssignmentEditorModal({
                 }`}
               />
             </button>
+          </div>
+
+          <div className="space-y-3 bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className="text-base">📁</span>
+              <div>
+                <p className="text-sm font-bold text-slate-900">
+                  Assignment Reference Attachments
+                </p>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  Attach reference PDFs, Word documents, or Google Drive /
+                  YouTube links for students.
+                </p>
+              </div>
+            </div>
+
+            {/* Existing Attachments list (for Edit mode) */}
+            {existingAttachments.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                  Currently Attached
+                </label>
+                <div className="space-y-1">
+                  {existingAttachments.map((att, idx) => (
+                    <div
+                      key={att._id || idx}
+                      className="flex items-center justify-between p-2 bg-white border border-slate-200 rounded-lg text-xs"
+                    >
+                      <span className="truncate max-w-md font-medium text-slate-800">
+                        📄 {att.fileName || att.title || att.url}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveExistingAttachment(idx)}
+                        className="text-red-600 hover:text-red-700 font-bold ml-2 shrink-0"
+                      >
+                        ✕ Delete
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Staged New Files list */}
+            {newFiles.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">
+                  Files Ready for Upload
+                </label>
+                <div className="space-y-1">
+                  {newFiles.map((file, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between p-2 bg-indigo-50 border border-indigo-100 rounded-lg text-xs text-indigo-900"
+                    >
+                      <span className="truncate max-w-md font-semibold">
+                        📎 {file.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveNewFile(idx)}
+                        className="text-red-600 hover:text-red-700 font-bold ml-2 shrink-0"
+                      >
+                        ✕ Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* File Input */}
+            <div className="pt-1">
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                Upload Document File(s)
+              </label>
+              <input
+                type="file"
+                multiple
+                accept=".pdf,.docx,.doc,.ppt,.pptx,.txt"
+                onChange={handleAddNewFiles}
+                className="sm:col-span-3 text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-bold file:bg-indigo-600 file:text-white hover:file:bg-indigo-700"
+              />
+            </div>
+
+            {/* Link Input */}
+            <div className="pt-2 border-t border-gray-170 space-y-2">
+              <label className="block text-[11px] font-bold text-slate-600">
+                Or Attach Drive / Video Link
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  placeholder="Link Title (e.g. Unit 2 Slides)"
+                  value={newLinkTitle}
+                  onChange={(e) => setNewLinkTitle(e.target.value)}
+                  className="flex-1 h-8 px-2.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none"
+                />
+                <input
+                  type="url"
+                  placeholder="https://drive.google.com/..."
+                  value={newLinkUrl}
+                  onChange={(e) => setNewLinkUrl(e.target.value)}
+                  className="flex-1 h-8 px-2.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleAddLink}
+                  className="h-8 px-3 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-lg shrink-0"
+                >
+                  + Add Link
+                </button>
+              </div>
+
+              {/* Staged Links List */}
+              {newLinks.length > 0 && (
+                <div className="space-y-1 pt-1">
+                  {newLinks.map((link, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between p-2 bg-white border border-slate-200 rounded-lg text-xs text-slate-800"
+                    >
+                      <span className="truncate max-w-md font-semibold">
+                        🔗 {link.title} ({link.url})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveNewLink(idx)}
+                        className="text-red-600 hover:text-red-700 font-bold ml-2 shrink-0"
+                      >
+                        ✕ Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Question Distribution */}
@@ -512,6 +717,25 @@ function AssignmentEditorModal({
               {criteriaSum !== parseFloat(totalMarks) &&
                 " (should match total marks)"}
             </p>
+          </div>
+
+          {/* 🟢 NEW: Student Instructions (dos/don'ts) — distinct from AI Notes below */}
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">
+              Instructions for Students (optional)
+            </label>
+            <p className="text-[11px] text-slate-400">
+              Shown to students before/during the assignment — e.g. "No outside
+              references allowed", "Answer in full sentences", time limits,
+              formatting expectations.
+            </p>
+            <textarea
+              rows={3}
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+              placeholder="e.g. Do not use external websites. Write at least 150 words per answer. You may not pause the viva once started."
+              className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded focus:bg-white focus:border-indigo-600 focus:outline-none resize-none"
+            />
           </div>
 
           {/* AI Notes */}

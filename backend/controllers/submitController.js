@@ -231,7 +231,7 @@ export const getStudentSubmissionDetails = async (req, res) => {
         path: "assignmentId",
         // 1. Specify the fields you want to select from the assignment
         select:
-          "title modality totalMarks dueDate questionPool aiNotes isResultPublished classId evaluationCriteria allowMultipleSubmissions",
+          "title modality totalMarks dueDate questionPool aiNotes instructions isResultPublished classId evaluationCriteria allowMultipleSubmissions attachments",
         // 2. Deeply populate the classId field nested inside the assignment model to get its metadata
         populate: {
           path: "classId",
