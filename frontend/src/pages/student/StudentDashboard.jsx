@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { getStudentDashboardAPI, joinClassroomAPI } from "../../services/api";
 import { getSubjectIcon } from "../../utils/subjectIcons";
+import { Search } from "lucide-react";
 
 function StudentDashboard() {
   const navigate = useNavigate();
@@ -108,8 +109,19 @@ function StudentDashboard() {
       {/* 🟢 NEW: Search bar — visible on mobile and desktop */}
       <div className="max-w-2xl mx-auto w-full">
         <div className="relative">
-          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400">
-            🔍
+          <span className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none flex items-center justify-center">
+            <svg
+              className="w-4 h-4 text-slate-400"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <circle cx="11" cy="11" r="8" />
+              <line x1="16.5" y1="16.5" x2="21" y2="21" />
+            </svg>
           </span>
           <input
             type="text"
@@ -166,7 +178,7 @@ function StudentDashboard() {
         // 🔧 Grid + card markup mirrors TeacherDashboard.jsx exactly (same minmax(380px,1fr)
         // breakpoint, same responsive title scale text-sm→lg:text-2xl) so cards look
         // identical between roles.
-        <div className="grid gap-4 sm:gap-5 w-full grid-cols-[repeat(auto-fill,minmax(280px,1fr))] md:grid-cols-[repeat(auto-fill,minmax(380px,1fr))]">
+        <div className="grid gap-4 sm:gap-5 w-full grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
           {filteredClasses.map((item) => {
             // 🔧 Same card style as TeacherDashboard — reads the classroom's chosen
             // subjectIcon (set by the teacher when they created it) rather than
@@ -196,10 +208,10 @@ function StudentDashboard() {
                 </div>
 
                 <div className="p-4 flex-1 space-y-1">
-                  <h4 className="text-sm sm:text-base md:text-lg lg:text-2xl font-bold text-slate-900 leading-snug line-clamp-2 break-words group-hover:text-orange-600 transition-colors">
+                  <h4 className="text-sm sm:text-base font-bold text-slate-900 leading-snug line-clamp-2 break-words group-hover:text-orange-600 transition-colors">
                     {item.name}
                   </h4>
-                  <p className="text-xs md:text-lg text-slate-400 font-medium truncate">
+                  <p className="text-xs text-slate-400 font-medium truncate">
                     Prof: {item.teacherId?.name || "Faculty Coordinator"}
                   </p>
                 </div>
