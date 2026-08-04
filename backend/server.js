@@ -10,6 +10,7 @@ import assignRoutes from "./routes/assignRoutes.js";
 import submitRoutes from "./routes/submitRoutes.js";
 import storageRoutes from "./routes/storageRoutes.js";
 import resourceRoutes from "./routes/resourceRoutes.js";
+import cronRoutes from "./routes/cronRoutes.js";
 
 dotenv.config();
 
@@ -53,6 +54,7 @@ app.use("/api/assignments", assignRoutes);
 app.use("/api/submissions", submitRoutes);
 app.use("/api/storage", storageRoutes);
 app.use("/api/resources", resourceRoutes);
+app.use("/api/cron", cronRoutes);
 
 // Basic Route for testing
 app.get("/", (req, res) => {
