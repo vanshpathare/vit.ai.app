@@ -19,14 +19,14 @@ export const registerUser = async (req, res) => {
 
   try {
     // 🎓 1. VIT CAMPUS DOMAIN GUARDRAIL
-    const vitDomainRegex = /^[a-zA-Z0-9._%+-]+@vit\.edu\.in$/;
+    // const vitDomainRegex = /^[a-zA-Z0-9._%+-]+@vit\.edu\.in$/;
 
-    if (!vitDomainRegex.test(email)) {
-      return res.status(403).json({
-        message:
-          "Access Denied. Registration is strictly restricted to Vidyalankar Institute of Technology students and faculty (@vit.edu.in).",
-      });
-    }
+    // if (!vitDomainRegex.test(email)) {
+    //   return res.status(403).json({
+    //     message:
+    //       "Access Denied. Registration is strictly restricted to Vidyalankar Institute of Technology students and faculty (@vit.edu.in).",
+    //   });
+    // }
 
     // 🔒 2. STRONG PASSWORD SECURITY GUARDRAIL
     // Enforces: Min 8 chars, 1 uppercase, 1 lowercase, 1 number, and 1 special symbol
