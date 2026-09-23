@@ -166,9 +166,11 @@ function TextWorkspace() {
 
       // 1. Gather the active questions based on our fallback hierarchy
       const activeQuestions =
-        submission.assignedQuestions?.length > 0
-          ? submission.assignedQuestions
-          : submission.assignmentId?.questionPool || [];
+        !isSubmitted && submission.assignmentId?.questionPool?.length > 0
+          ? submission.assignmentId.questionPool
+          : submission.assignedQuestions?.length > 0
+            ? submission.assignedQuestions
+            : [];
 
       // 2. Format the responses array layout matching your MongoDB structure
       const formattedResponses = activeQuestions.map((qText, index) => ({
@@ -423,10 +425,12 @@ function TextWorkspace() {
             ) : (
               // 📝 EDIT MODE: Widescreen typing environment layout
               <div className="space-y-6 w-full">
-                {(submission.assignedQuestions &&
-                submission.assignedQuestions.length > 0
-                  ? submission.assignedQuestions
-                  : submission.assignmentId?.questionPool || []
+                {(!isSubmitted &&
+                submission.assignmentId?.questionPool?.length > 0
+                  ? submission.assignmentId.questionPool
+                  : submission.assignedQuestions?.length > 0
+                    ? submission.assignedQuestions
+                    : []
                 ).map((qText, index) => (
                   <div
                     key={index}
