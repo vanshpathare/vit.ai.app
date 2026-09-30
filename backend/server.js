@@ -1,3 +1,16 @@
+// Put this at the very top of server.js
+import net from "net";
+const originalConnect = net.Socket.prototype.connect;
+net.Socket.prototype.connect = function (...args) {
+  if (args[0]?.port === 6379 || args[0] === 6379) {
+    console.error(
+      "🚨 FOUND THE CULPRIT! Attempting to connect to port 6379 from here:",
+    );
+    console.trace();
+  }
+  return originalConnect.apply(this, args);
+};
+
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";

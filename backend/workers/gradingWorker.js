@@ -5,7 +5,7 @@ import {
   evaluateConversationTurn,
 } from "../services/aiRouter.js";
 
-const connectionUrl = process.env.REDIS_URL || "redis://localhost:6379";
+const connectionUrl = process.env.REDIS_URL;
 
 // Spawn the background worker with a strict rate limit
 const gradingWorker = new Worker(
