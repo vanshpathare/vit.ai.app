@@ -7,6 +7,10 @@ import {
 
 const connectionUrl = process.env.REDIS_URL;
 
+if (!connectionUrl) {
+  console.error("❌ CRITICAL: REDIS_URL is missing in gradingWorker.js!");
+}
+
 // Spawn the background worker with a strict rate limit
 const gradingWorker = new Worker(
   "ai-grading-queue",
