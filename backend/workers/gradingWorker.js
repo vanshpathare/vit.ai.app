@@ -1,4 +1,5 @@
 // workers/gradingWorker.js
+import "dotenv/config";
 import { Worker } from "bullmq";
 import {
   evaluateWithRouter,
@@ -54,7 +55,9 @@ const gradingWorker = new Worker(
     }
   },
   {
-    connection: connectionUrl,
+    connection: {
+      url: process.env.REDIS_URL, // 👈 Explicitly pass the URL inside an object configuration
+    },
     concurrency: 2, // Process max 2 concurrent jobs per worker instance
     limiter: {
       max: 15, // Maximum 15 requests

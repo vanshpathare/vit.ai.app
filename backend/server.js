@@ -1,19 +1,12 @@
 // Put this at the very top of server.js
+import dotenv from "dotenv";
+dotenv.config();
+
 import net from "net";
-const originalConnect = net.Socket.prototype.connect;
-net.Socket.prototype.connect = function (...args) {
-  if (args[0]?.port === 6379 || args[0] === 6379) {
-    console.error(
-      "🚨 FOUND THE CULPRIT! Attempting to connect to port 6379 from here:",
-    );
-    console.trace();
-  }
-  return originalConnect.apply(this, args);
-};
 
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
+//import dotenv from "dotenv";
 import connectDB from "./config/db.js";
 
 // 🚀 IMPORT YOUR ROUTE GATEWAYS
@@ -27,7 +20,23 @@ import cronRoutes from "./routes/cronRoutes.js";
 // server.js (or app.js)
 import "./workers/gradingWorker.js"; // 👈 Add this line so the worker boots up with your server
 
-dotenv.config();
+// const originalConnect = net.Socket.prototype.connect;
+// net.Socket.prototype.connect = function (...args) {
+//   if (args[0]?.port === 6379 || args[0] === 6379) {
+//     console.error(
+//       "🚨 FOUND THE CULPRIT! Attempting to connect to port 6379 from here:",
+//     );
+//     console.trace();
+//   }
+//   return originalConnect.apply(this, args);
+// };
+
+// console.log(
+//   "🔍 DEBUG CHECK - Loaded REDIS_URL:",
+//   process.env.REDIS_URL
+//     ? "Exists (Length: " + process.env.REDIS_URL.length + ")"
+//     : "UNDEFINED ❌",
+// );
 
 const app = express();
 

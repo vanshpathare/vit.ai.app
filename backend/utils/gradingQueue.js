@@ -93,6 +93,7 @@
 // export const gradingQueue = new GradingQueue();
 
 // utils/gradingQueue.js
+import "dotenv/config";
 import { Queue } from "bullmq";
 
 // Automatically detects Render's REDIS_URL or defaults to local Redis instance
@@ -106,5 +107,7 @@ if (!connectionUrl) {
 
 // Create and export the persistent BullMQ queue instance
 export const gradingQueue = new Queue("ai-grading-queue", {
-  connection: connectionUrl,
+  connection: {
+    url: process.env.REDIS_URL, // 👈 Explicitly pass the URL inside an object configuration
+  },
 });
