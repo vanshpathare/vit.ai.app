@@ -1,14 +1,20 @@
 //submitController.js
 import Submission from "../models/Submission.js";
 import Assignment from "../models/Assignment.js";
+// import {
+//   evaluateWithGemini,
+//   evaluateConversationTurn,
+// } from "../services/geminiService.js";
 import {
-  evaluateWithGemini,
+  evaluateWithRouter,
   evaluateConversationTurn,
-} from "../services/geminiService.js";
+} from "../services/aiRouter.js";
 import { gradingQueue } from "../utils/gradingQueue.js";
 
 // 1. EXECUTE AI EVALUATION ENGINE (HANDLES BOTH STATIC TEXT & DYNAMIC CONVERSATIONAL SPEECH)
 export const submitAssignment = async (req, res) => {
+  console.log("🔍 Incoming req.body:", req.body);
+  console.log("🔍 Incoming req.file:", req.file);
   const { submissionId, responses, tabSwitchCount } = req.body;
 
   try {
@@ -85,12 +91,21 @@ export const submitAssignment = async (req, res) => {
             \n`;
           });
 
-          return await evaluateWithGemini(
-            structuredExamScript,
-            null, // responseInput buffer set to null since text is embedded in the script
-            criteriaMap,
-            assignment.aiNotes,
-          );
+          // return await evaluateWithGemini(
+          //   structuredExamScript,
+          //   null, // responseInput buffer set to null since text is embedded in the script
+          //   criteriaMap,
+          //   assignment.aiNotes,
+          // );
+
+          return await evaluateWithRouter({
+            question: assignment.questionPool, // 👈 Pass the question pool array directly
+            responseInput: responses, // 👈 Pass the student responses array directly
+            criteriaMap: criteriaMap,
+            aiNotes: assignment.aiNotes,
+            modality: "Text-Only",
+            preferredModel: req.body.preferredModel,
+          });
         }
 
         // 🎙️ MODE B: SPEECH-ONLY DYNAMIC CONVERSATIONAL FLOW
@@ -99,8 +114,11 @@ export const submitAssignment = async (req, res) => {
             assignmentTitle: assignment.title,
             aiNotes: assignment.aiNotes,
             criteriaMap: criteriaMap,
+            questionPool: assignment.questionPool,
+            totalQuestions: assignment.speechQuestionCount,
             history: submission.conversationHistory || [],
             audioFile: req.file,
+            preferredModel: req.body.preferredModel,
           });
         }
       });

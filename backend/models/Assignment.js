@@ -53,6 +53,10 @@ const assignmentSchema = new mongoose.Schema(
       enum: ["Text-Only", "Speech-Only"],
       required: true,
     },
+    speechQuestionCount: {
+      type: Number,
+      default: 4, // Default fallback limit for speech vitas if not specified
+    },
     totalMarks: {
       type: Number,
       required: true,

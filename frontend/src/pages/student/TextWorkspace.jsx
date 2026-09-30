@@ -29,6 +29,7 @@ function TextWorkspace() {
       try {
         setLoading(true);
         const response = await getSubmissionDetailsAPI(id);
+        console.log("🔍 DEBUG - Full Submission Object:", response.data);
         setSubmission(response.data);
 
         // Inherit any existing tab switch tallies saved from previous sessions

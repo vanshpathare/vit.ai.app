@@ -32,6 +32,9 @@ function AssignmentEditorModal({
   const [modality, setModality] = useState(
     existingAssignment?.modality || "Text-Only",
   );
+  const [speechQuestionCount, setSpeechQuestionCount] = useState(
+    existingAssignment?.speechQuestionCount || 4,
+  );
   const [dueDate, setDueDate] = useState(
     toDatetimeLocal(existingAssignment?.dueDate),
   );
@@ -228,6 +231,12 @@ function AssignmentEditorModal({
     formData.append("classId", classId);
     formData.append("title", title.trim());
     formData.append("modality", modality);
+    if (modality === "Speech-Only") {
+      formData.append(
+        "speechQuestionCount",
+        parseInt(speechQuestionCount) || 4,
+      );
+    }
     formData.append("dueDate", new Date(dueDate).toISOString());
     formData.append("totalMarks", parseFloat(totalMarks) || 0);
     formData.append("aiNotes", aiNotes.trim());
@@ -326,6 +335,27 @@ function AssignmentEditorModal({
                 <option value="Speech-Only">Speech-Only (Viva)</option>
               </select>
             </div>
+
+            {modality === "Speech-Only" && (
+              <div className="space-y-1.5 bg-indigo-50/50 p-2.5 rounded-lg border border-indigo-100">
+                <label className="text-[11px] font-bold text-indigo-900 uppercase tracking-wide flex items-center justify-between">
+                  <span>Target Viva Questions</span>
+                  <span className="text-[10px] text-indigo-600 font-normal">
+                    AI will ask exactly this many
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  required
+                  value={speechQuestionCount}
+                  onChange={(e) => setSpeechQuestionCount(e.target.value)}
+                  placeholder="e.g. 3"
+                  className="w-full h-9 px-3 text-sm bg-white border border-indigo-200 rounded focus:border-indigo-600 focus:outline-none font-semibold text-indigo-950"
+                />
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wide">

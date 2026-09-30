@@ -201,8 +201,12 @@ export const evaluateConversationTurn = async ({
       Instructor Custom Instructions & Notes: "${aiNotes}".
       
       Your role is to analyze the student's incoming voice recording, transcribe it accurately, and dynamically generate the next logical conversational question or follow-up response.
+
+      CRITICAL INITIAL TURN RULE:
+      - If the dialogue history is empty or this is the student's first response, you MUST immediately ask a direct, clear opening question about "${assignmentTitle}" to start the exam. Do not just greet or repeat the title.
       
       CRITICAL INSTRUCTOR DIRECTIVES & LIFECYCLE MANAGEMENT RULES:
+      1. NEVER repeat, read, or parrot back the assignment title ("${assignmentTitle}" or ") as a greeting, introduction, or statement. The student already knows what exam they are taking.
       - Read and strictly follow the instructor's rules, topic constraints, and custom instructions provided here: "${aiNotes}".
       - Dynamically determine how many questions to ask, what topics to cover, and when the assessment has reached its logical conclusion based entirely on those Instructor Notes and the flow of the conversation history.
       - Write all feedback from the perspective of a strict but encouraging human professor or corporate interviewer.
