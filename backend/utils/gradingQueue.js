@@ -98,6 +98,12 @@ import { Queue } from "bullmq";
 // Automatically detects Render's REDIS_URL or defaults to local Redis instance
 const connectionUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
+if (!connectionUrl) {
+  console.error(
+    "❌ CRITICAL: REDIS_URL environment variable is missing on Render!",
+  );
+}
+
 // Create and export the persistent BullMQ queue instance
 export const gradingQueue = new Queue("ai-grading-queue", {
   connection: connectionUrl,
