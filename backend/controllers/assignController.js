@@ -7,6 +7,10 @@ import { generateQuestionsFromMaterial } from "../services/geminiService.js";
 import { createRequire } from "module";
 import { deleteFromSupabase } from "../services/storageService.js";
 import { uploadToSupabase } from "../services/storageService.js";
+import {
+  getCachedAssignment,
+  invalidateAssignmentCache,
+} from "../utils/cacheUtils.js";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import mammoth from "mammoth";
@@ -306,7 +310,7 @@ export const initializeOrGetSubmission = async (req, res) => {
   const { assignmentId } = req.body;
 
   try {
-    const assignment = await Assignment.findById(assignmentId);
+    const assignment = await getCachedAssignment(assignmentId);
     if (!assignment)
       return res.status(404).json({ message: "Assignment target not found." });
 
@@ -456,6 +460,8 @@ export const toggleResultPublish = async (req, res) => {
       return res
         .status(404)
         .json({ message: "Assignment target not located." });
+
+    await invalidateAssignmentCache(req.params.id);
 
     res.status(200).json({
       message: isResultPublished
@@ -633,6 +639,8 @@ export const updateAssignmentSettings = async (req, res) => {
 
     const updatedAssignment = await assignment.save();
 
+    await invalidateAssignmentCache(id);
+
     return res.status(200).json({
       message: "Assignment settings updated live.",
       assignment: updatedAssignment,
@@ -721,19 +729,24 @@ export const parseMaterialForQuestions = async (req, res) => {
 // the question pool, criteria, and classId that the list view doesn't return.
 export const getAssignmentById = async (req, res) => {
   try {
-    const assignment = await Assignment.findById(req.params.id).populate(
-      "classId",
-      "name teacherId",
-    );
+    const assignment = await getCachedAssignment(req.params.id);
 
     if (!assignment) {
       return res.status(404).json({ message: "Assignment not found." });
     }
 
     // 🔒 OWNERSHIP GUARDRAIL: Only the classroom's own teacher may view/edit it
+    // if (
+    //   assignment.classId?.teacherId &&
+    //   assignment.classId.teacherId.toString() !== req.user._id.toString()
+    // ) {
+    //   return res.status(403).json({ message: "Unauthorized action." });
+    // }
+    const classroom = await Classroom.findById(assignment.classId);
+
     if (
-      assignment.classId?.teacherId &&
-      assignment.classId.teacherId.toString() !== req.user._id.toString()
+      !classroom ||
+      classroom.teacherId.toString() !== req.user._id.toString()
     ) {
       return res.status(403).json({ message: "Unauthorized action." });
     }
@@ -767,6 +780,8 @@ export const deleteAssignment = async (req, res) => {
 
     // 2. Delete the assignment from MongoDB
     await Assignment.findByIdAndDelete(id);
+
+    await invalidateAssignmentCache(id);
 
     return res
       .status(200)

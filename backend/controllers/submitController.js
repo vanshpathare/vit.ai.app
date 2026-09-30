@@ -1,38 +1,27 @@
 //submitController.js
 import Submission from "../models/Submission.js";
-import Assignment from "../models/Assignment.js";
-// import {
-//   evaluateWithGemini,
-//   evaluateConversationTurn,
-// } from "../services/geminiService.js";
-import {
-  evaluateWithRouter,
-  evaluateConversationTurn,
-} from "../services/aiRouter.js";
-import { gradingQueue } from "../utils/gradingQueue.js";
+import { getCachedAssignment } from "../utils/cacheUtils.js";
+import { processAiGrading } from "../services/gradingService.js"; // 👈 Import the fail-safe grading service wrapper
 
 // 1. EXECUTE AI EVALUATION ENGINE (HANDLES BOTH STATIC TEXT & DYNAMIC CONVERSATIONAL SPEECH)
 export const submitAssignment = async (req, res) => {
   console.log("🔍 Incoming req.body:", req.body);
   console.log("🔍 Incoming req.file:", req.file);
-  const { submissionId, responses, tabSwitchCount } = req.body;
+  const { submissionId, responses, tabSwitchCount, preferredModel } = req.body;
 
   try {
-    const submission =
-      await Submission.findById(submissionId).populate("assignmentId");
+    const submission = await Submission.findById(submissionId);
     if (!submission) {
       return res
         .status(404)
         .json({ message: "Target submission record not located." });
     }
 
-    const assignment = submission.assignmentId;
-    let criteriaMap = Object.fromEntries(assignment.evaluationCriteria || []);
-
-    if (Object.keys(criteriaMap).length === 0) {
-      criteriaMap = {
-        "Overall Performance": assignment.totalMarks || 20, // Defaults to total marks if available
-      };
+    const assignment = await getCachedAssignment(submission.assignmentId);
+    if (!assignment) {
+      return res
+        .status(404)
+        .json({ message: "Assignment profile context not found." });
     }
 
     // Guardrail 1: Enforce deadline check
@@ -42,7 +31,7 @@ export const submitAssignment = async (req, res) => {
       });
     }
 
-    // Guardrail 2: Enforce Attempt Rules for completed sessions (Only blocks text-only or finished interviews)
+    // Guardrail 2: Enforce Attempt Rules for completed sessions
     if (
       submission.status === "submitted" &&
       !assignment.allowMultipleSubmissions
@@ -74,61 +63,22 @@ export const submitAssignment = async (req, res) => {
 
     let result;
 
-    // 🚀 ENQUEUE THE RELEVANT AI EVALUATION PIPELINE
+    // 🚀 EXECUTE UNIVERSAL AI GRADING (BullMQ with automatic Redis failover fallback)
     try {
-      result = await gradingQueue.enqueue(async () => {
-        // 📝 MODE A: TEXT-ONLY STATIC EVALUATION FLOW
-        if (assignment.modality === "Text-Only") {
-          submission.responses = responses;
-
-          // Build a perfectly compiled exam script for the Gemini prompt
-          let structuredExamScript = "";
-          responses.forEach((item, index) => {
-            structuredExamScript += `
-              --- QUESTION #${index + 1} ---
-              PROMPT ASKED: "${item.questionText}"
-              STUDENT ANSWER: "${item.answerText}"
-            \n`;
-          });
-
-          // return await evaluateWithGemini(
-          //   structuredExamScript,
-          //   null, // responseInput buffer set to null since text is embedded in the script
-          //   criteriaMap,
-          //   assignment.aiNotes,
-          // );
-
-          return await evaluateWithRouter({
-            question: assignment.questionPool, // 👈 Pass the question pool array directly
-            responseInput: responses, // 👈 Pass the student responses array directly
-            criteriaMap: criteriaMap,
-            aiNotes: assignment.aiNotes,
-            modality: "Text-Only",
-            preferredModel: req.body.preferredModel,
-          });
-        }
-
-        // 🎙️ MODE B: SPEECH-ONLY DYNAMIC CONVERSATIONAL FLOW
-        else if (assignment.modality === "Speech-Only") {
-          return await evaluateConversationTurn({
-            assignmentTitle: assignment.title,
-            aiNotes: assignment.aiNotes,
-            criteriaMap: criteriaMap,
-            questionPool: assignment.questionPool,
-            totalQuestions: assignment.speechQuestionCount,
-            history: submission.conversationHistory || [],
-            audioFile: req.file,
-            preferredModel: req.body.preferredModel,
-          });
-        }
+      result = await processAiGrading({
+        assignment,
+        submission,
+        responses,
+        audioFile: req.file,
+        preferredModel,
       });
 
-      console.log("🤖 RAW GEMINI SERVICE RESPONSE OUTFLOW:", result);
-    } catch (queueError) {
+      console.log("🤖 RAW AI SERVICE RESPONSE OUTFLOW:", result);
+    } catch (gradingError) {
       return res.status(503).json({
         message:
-          "The AI evaluation terminal is currently heavily congested. Please try again in a moment.",
-        error: queueError.message,
+          "The AI evaluation service is currently heavily congested or unavailable. Please try again in a moment.",
+        error: gradingError.message,
       });
     }
 
@@ -137,7 +87,7 @@ export const submitAssignment = async (req, res) => {
       parseInt(tabSwitchCount) || submission.tabSwitchCount;
 
     if (assignment.modality === "Text-Only") {
-      // Bind finalized metrics directly for Text submissions
+      submission.responses = responses; // Save responses for text assignments
       submission.aiEvaluation = {
         scores: result.scores,
         totalScoreGivenByAI: result.totalScoreGivenByAI,
@@ -147,19 +97,16 @@ export const submitAssignment = async (req, res) => {
       submission.submittedAt = new Date();
       submission.finalScoreOverride = null;
     } else if (assignment.modality === "Speech-Only") {
-      // Append what the student said from Gemini's raw audio decoding transcription
       submission.conversationHistory.push({
         role: "student",
         text: result.transcript,
       });
 
-      // 🏁 Check if the AI has signaled the conversation loop is over based on teacher's rules
       if (result.nextQuestion === "CONVERSATION_COMPLETE") {
         submission.status = "submitted";
         submission.submittedAt = new Date();
         submission.finalScoreOverride = null;
 
-        // Bind finalized master grading reports back to DB properties
         submission.aiEvaluation = {
           scores: result.finalScores || {},
           totalScoreGivenByAI: result.totalScoreGivenByAI || 0,
@@ -168,7 +115,6 @@ export const submitAssignment = async (req, res) => {
             "Interview simulation concluded successfully.",
         };
       } else {
-        // Conversation is ongoing! Push the AI's follow-up question turn into the historical thread
         submission.conversationHistory.push({
           role: "interviewer",
           text: result.nextQuestion,
@@ -179,7 +125,6 @@ export const submitAssignment = async (req, res) => {
 
     await submission.save();
 
-    // Respond back dynamically. For speech, React reads 'nextQuestionToSpeak' through Text-to-Speech!
     res.status(200).json({
       message: "Submission updated and processed successfully.",
       status: submission.status,
@@ -198,10 +143,10 @@ export const submitAssignment = async (req, res) => {
   }
 };
 
-// 2. FETCH GRADES FOR INSTRUCTOR PANELS (SUPPORTING STRUCTURAL STATUS FILTERS)
+// 2. FETCH GRADES FOR INSTRUCTOR PANELS
 export const getAssignmentSubmissions = async (req, res) => {
   const { assignmentId } = req.params;
-  const { status } = req.query; // Captures optional ?status=submitted or ?status=pending filters
+  const { status } = req.query;
 
   try {
     let queryFilter = { assignmentId };
@@ -237,20 +182,14 @@ export const overrideSubmissionScore = async (req, res) => {
   }
 };
 
-// 4. FETCH FULL SUBMISSION DETAIL (Student = owner only, Teacher = any submission in their class)
-// 🟢 UPDATED: Previously this hard-blocked anyone who wasn't the exact student, which meant
-// teachers could never open the "Check" view. Teachers now get the complete, unmasked record
-// (raw AI score + any override) since they're the ones doing the grading. The existing masking
-// rules (hide marks until published, hide the override sentinel) still apply for students.
+// 4. FETCH FULL SUBMISSION DETAIL
 export const getStudentSubmissionDetails = async (req, res) => {
   try {
     const submission = await Submission.findById(req.params.id)
       .populate({
         path: "assignmentId",
-        // 1. Specify the fields you want to select from the assignment
         select:
           "title modality totalMarks dueDate questionPool aiNotes instructions isResultPublished classId evaluationCriteria allowMultipleSubmissions attachments",
-        // 2. Deeply populate the classId field nested inside the assignment model to get its metadata
         populate: {
           path: "classId",
           select: "name",
@@ -264,11 +203,12 @@ export const getStudentSubmissionDetails = async (req, res) => {
         .json({ message: "Submission workspace not found." });
     }
 
+    const assignment = await getCachedAssignment(submission.assignmentId);
+
     const isOwner =
       submission.studentId._id.toString() === req.user._id.toString();
     const isTeacher = req.user.role === "teacher";
 
-    // Security: Only the student who owns it, or a teacher grading it, may view this workspace
     if (!isOwner && !isTeacher) {
       return res
         .status(403)
@@ -276,41 +216,31 @@ export const getStudentSubmissionDetails = async (req, res) => {
     }
 
     let sanitizedSubmission = submission.toObject();
+    sanitizedSubmission.assignmentId = assignment;
 
-    // 🧑‍🏫 TEACHER VIEW: Return the complete unmasked record so grading has full context
     if (isTeacher) {
       return res.status(200).json(sanitizedSubmission);
     }
 
-    // 🎓 STUDENT VIEW SANITIZATION BELOW (unchanged)
-
-    // 🟢 OVERRIDE SECURITY MASKING:
-    // If a manual override exists, mask it so the student thinks the AI or system evaluated it natively as that score
     if (
       sanitizedSubmission.finalScoreOverride !== null &&
       sanitizedSubmission.finalScoreOverride !== undefined
     ) {
       if (sanitizedSubmission.aiEvaluation) {
-        // Force the AI total score to match the teacher's final decision
         sanitizedSubmission.aiEvaluation.totalScoreGivenByAI =
           sanitizedSubmission.finalScoreOverride;
       }
-
-      // Delete the override property completely so it disappears from the Network Tab payload
       delete sanitizedSubmission.finalScoreOverride;
     }
 
-    // Security: Handle isResultPublished sanitation check right below this...
-    const assignment = sanitizedSubmission.assignmentId;
     if (assignment && assignment.isResultPublished === false) {
       if (sanitizedSubmission.aiEvaluation) {
         sanitizedSubmission.aiEvaluation.totalScoreGivenByAI = null;
         sanitizedSubmission.aiEvaluation.scores = null;
       }
-      delete sanitizedSubmission.finalScoreOverride; // Extra safety fallback
+      delete sanitizedSubmission.finalScoreOverride;
     }
 
-    // Send the sanitized, seamless payload
     res.status(200).json(sanitizedSubmission);
   } catch (error) {
     res.status(500).json({
@@ -325,7 +255,6 @@ export const logSubmissionInfraction = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Use $inc to atomically increment the counter directly inside MongoDB
     const updatedSubmission = await Submission.findByIdAndUpdate(
       id,
       { $inc: { tabSwitchCount: 1 } },

@@ -11,6 +11,8 @@ import submitRoutes from "./routes/submitRoutes.js";
 import storageRoutes from "./routes/storageRoutes.js";
 import resourceRoutes from "./routes/resourceRoutes.js";
 import cronRoutes from "./routes/cronRoutes.js";
+// server.js (or app.js)
+import "./workers/gradingWorker.js"; // 👈 Add this line so the worker boots up with your server
 
 dotenv.config();
 

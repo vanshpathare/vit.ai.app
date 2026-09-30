@@ -8,6 +8,7 @@ import {
 } from "../controllers/submitController.js";
 import { protect, teacherOnly } from "../middleware/authMiddleware.js";
 import { upload } from "../middleware/uploadMiddleware.js";
+import { vivaRateLimiter } from "../middleware/vivaRateLimiter.js";
 
 const router = express.Router();
 
@@ -16,7 +17,12 @@ router.use(protect);
 
 // 1. Process and evaluate student work (Catches file binaries inside 'audio' fields dynamically)
 // Target URL: POST /api/submissions/execute
-router.post("/execute", upload.single("audio"), submitAssignment);
+router.post(
+  "/execute",
+  vivaRateLimiter,
+  upload.single("audio"),
+  submitAssignment,
+);
 
 // 2. Fetch the complete classroom grading roster sheet (Strictly Teacher role accounts)
 // Target URL: GET /api/submissions/assignment/:assignmentId
