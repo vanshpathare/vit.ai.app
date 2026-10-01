@@ -2,6 +2,7 @@ import { createClient } from "redis";
 
 const redisClient = createClient({
   url: process.env.REDIS_URL,
+  connectTimeout: 10000, // default is 5000
   socket: { reconnectStrategy: (retries) => Math.min(retries * 200, 3000) },
 });
 
