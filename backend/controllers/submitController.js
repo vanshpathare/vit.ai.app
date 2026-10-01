@@ -2,11 +2,18 @@
 import Submission from "../models/Submission.js";
 import { getCachedAssignment } from "../utils/cacheUtils.js";
 import { processAiGrading } from "../services/gradingService.js"; // 👈 Import the fail-safe grading service wrapper
+import { gradingQueue } from "../utils/gradingQueue.js"; // 👈 Make sure to import your queue
+import { toCriteriaMap } from "../utils/criteriaUtils.js";
 
-// 1. EXECUTE AI EVALUATION ENGINE (HANDLES BOTH STATIC TEXT & DYNAMIC CONVERSATIONAL SPEECH)
+const withTimeout = (promise, ms, label) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out`)), ms),
+    ),
+  ]);
+
 export const submitAssignment = async (req, res) => {
-  console.log("🔍 Incoming req.body:", req.body);
-  console.log("🔍 Incoming req.file:", req.file);
   const { submissionId, responses, tabSwitchCount, preferredModel } = req.body;
 
   try {
@@ -24,14 +31,12 @@ export const submitAssignment = async (req, res) => {
         .json({ message: "Assignment profile context not found." });
     }
 
-    // Guardrail 1: Enforce deadline check
     if (new Date() > new Date(assignment.dueDate)) {
       return res.status(403).json({
         message: "The evaluation due date has passed. Submission rejected.",
       });
     }
 
-    // Guardrail 2: Enforce Attempt Rules for completed sessions
     if (
       submission.status === "submitted" &&
       !assignment.allowMultipleSubmissions
@@ -42,7 +47,6 @@ export const submitAssignment = async (req, res) => {
       });
     }
 
-    // Guardrail 3: Text-Only Input Validation Check
     if (
       assignment.modality === "Text-Only" &&
       (!responses || !Array.isArray(responses) || responses.length === 0)
@@ -53,7 +57,6 @@ export const submitAssignment = async (req, res) => {
       });
     }
 
-    // Guardrail 4: Speech-Only Input File Check
     if (assignment.modality === "Speech-Only" && !req.file) {
       return res.status(400).json({
         message:
@@ -63,8 +66,64 @@ export const submitAssignment = async (req, res) => {
 
     let result;
 
-    // 🚀 EXECUTE UNIVERSAL AI GRADING (BullMQ with automatic Redis failover fallback)
+    // 💾 Save the student's data first so nothing is lost if AI/Redis fails
+    submission.tabSwitchCount =
+      parseInt(tabSwitchCount) || submission.tabSwitchCount;
+    if (assignment.modality === "Text-Only") {
+      submission.responses = responses;
+    }
+    await submission.save();
+
     try {
+      if (assignment.modality === "Text-Only") {
+        const prevStatus = submission.status;
+
+        // atomic lock: a double-click can't enqueue twice
+        const locked = await Submission.findOneAndUpdate(
+          { _id: submission._id, status: { $ne: "queued" } },
+          { $set: { status: "queued" } },
+        );
+        if (!locked) {
+          return res
+            .status(409)
+            .json({
+              message: "Already queued for evaluation.",
+              status: "queued",
+            });
+        }
+
+        try {
+          await withTimeout(
+            gradingQueue.add("evaluate-assignment", {
+              submissionId: submission._id.toString(),
+              assignment,
+              responses,
+              criteriaMap: toCriteriaMap(assignment),
+              preferredModel,
+              prevStatus,
+            }),
+            5000,
+            "Queue add",
+          );
+        } catch (queueErr) {
+          // roll back, then let the retry fallback below grade it inline
+          await Submission.updateOne(
+            { _id: submission._id },
+            { $set: { status: prevStatus } },
+          );
+          throw queueErr;
+        }
+
+        submission.status = "queued"; // so the response isn't stale
+        return res.status(202).json({
+          message:
+            "Assignment submitted successfully and queued for AI evaluation.",
+          status: "queued",
+          submission,
+        });
+      }
+
+      // Speech-Only: synchronous so the student gets the next question instantly
       result = await processAiGrading({
         assignment,
         submission,
@@ -72,22 +131,54 @@ export const submitAssignment = async (req, res) => {
         audioFile: req.file,
         preferredModel,
       });
-
-      console.log("🤖 RAW AI SERVICE RESPONSE OUTFLOW:", result);
     } catch (gradingError) {
-      return res.status(503).json({
-        message:
-          "The AI evaluation service is currently heavily congested or unavailable. Please try again in a moment.",
-        error: gradingError.message,
-      });
+      console.warn(
+        "⚠️ Queue/AI hiccup, using retry fallback:",
+        gradingError.message,
+      );
+
+      let success = false;
+      let attempts = 0;
+      let finalError;
+
+      while (!success && attempts < 3) {
+        attempts++;
+        try {
+          if (attempts > 1) {
+            await new Promise((r) => setTimeout(r, attempts * 3000));
+          }
+          result = await processAiGrading({
+            assignment,
+            submission,
+            responses,
+            audioFile: req.file,
+            preferredModel,
+          });
+          success = true;
+        } catch (retryError) {
+          finalError = retryError;
+          console.warn(
+            `⚠️ Fallback attempt ${attempts} failed:`,
+            retryError.message,
+          );
+        }
+      }
+
+      if (!success) {
+        return res.status(429).json({
+          message:
+            "⚠️ High Traffic Alert: Our AI servers are working at maximum capacity. Your answers are safely saved. Please wait about 30 seconds and click submit again.",
+          error: finalError?.message,
+        });
+      }
     }
 
-    // 💾 POST-PROCESSING & STATE CALCULATIONS
+    // 💾 Post-processing (inline fallback path + speech turns)
     submission.tabSwitchCount =
       parseInt(tabSwitchCount) || submission.tabSwitchCount;
 
     if (assignment.modality === "Text-Only") {
-      submission.responses = responses; // Save responses for text assignments
+      submission.responses = responses;
       submission.aiEvaluation = {
         scores: result.scores,
         totalScoreGivenByAI: result.totalScoreGivenByAI,
@@ -106,7 +197,6 @@ export const submitAssignment = async (req, res) => {
         submission.status = "submitted";
         submission.submittedAt = new Date();
         submission.finalScoreOverride = null;
-
         submission.aiEvaluation = {
           scores: result.finalScores || {},
           totalScoreGivenByAI: result.totalScoreGivenByAI || 0,

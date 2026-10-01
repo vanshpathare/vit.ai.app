@@ -1,75 +1,76 @@
-// workers/gradingWorker.js
 import "dotenv/config";
 import { Worker } from "bullmq";
-import {
-  evaluateWithRouter,
-  evaluateConversationTurn,
-} from "../services/aiRouter.js";
+import Submission from "../models/Submission.js";
+import { evaluateWithRouter } from "../services/aiRouter.js";
+import { bullConnection } from "../config/bullConnection.js";
 
-const connectionUrl = process.env.REDIS_URL;
-
-if (!connectionUrl) {
-  console.error("❌ CRITICAL: REDIS_URL is missing in gradingWorker.js!");
-}
-
-// Spawn the background worker with a strict rate limit
-const gradingWorker = new Worker(
+export const gradingWorker = new Worker(
   "ai-grading-queue",
   async (job) => {
-    const {
-      assignment,
-      submissionId,
-      responses,
-      audioFile,
-      modality,
-      preferredModel,
-      criteriaMap,
-      history,
-    } = job.data;
+    const { submissionId, assignment, responses, criteriaMap, preferredModel } =
+      job.data;
 
     console.log(
-      `⚙️ [Worker] Processing grading job ${job.id} for submission ${submissionId}`,
+      `⚙️ [Worker] Grading submission ${submissionId} (job ${job.id})`,
     );
 
-    // Execute the AI pipeline based on modality
-    if (modality === "Text-Only") {
-      return await evaluateWithRouter({
-        question: assignment.questionPool,
-        responseInput: responses,
-        criteriaMap,
-        aiNotes: assignment.aiNotes,
-        modality: "Text-Only",
-        preferredModel,
-      });
-    } else if (modality === "Speech-Only") {
-      return await evaluateConversationTurn({
-        assignmentTitle: assignment.title,
-        aiNotes: assignment.aiNotes,
-        criteriaMap,
-        questionPool: assignment.questionPool,
-        totalQuestions: assignment.speechQuestionCount,
-        history: history || [],
-        audioFile,
-        preferredModel,
-      });
+    // grade against what this student was assigned, not the whole pool
+    const sub =
+      await Submission.findById(submissionId).select("assignedQuestions");
+    const questions = sub?.assignedQuestions?.length
+      ? sub.assignedQuestions
+      : assignment.questionPool;
+
+    const result = await evaluateWithRouter({
+      question: questions,
+      responseInput: responses,
+      criteriaMap,
+      aiNotes: assignment.aiNotes,
+      modality: "Text-Only",
+      preferredModel,
+    });
+
+    // incomplete AI output -> throw so BullMQ retries instead of saving junk
+    if (
+      !result ||
+      !result.scores ||
+      typeof result.totalScoreGivenByAI !== "number"
+    ) {
+      throw new Error("AI returned an incomplete evaluation");
     }
+
+    await Submission.findByIdAndUpdate(submissionId, {
+      $set: {
+        aiEvaluation: {
+          scores: result.scores,
+          totalScoreGivenByAI: result.totalScoreGivenByAI,
+          feedback: result.feedback,
+        },
+        status: "submitted",
+        submittedAt: new Date(),
+        finalScoreOverride: null,
+      },
+    });
+
+    console.log(`✅ [Worker] Saved grade for submission ${submissionId}`);
   },
   {
-    connection: {
-      url: process.env.REDIS_URL, // 👈 Explicitly pass the URL inside an object configuration
-    },
-    concurrency: 2, // Process max 2 concurrent jobs per worker instance
-    limiter: {
-      max: 15, // Maximum 15 requests
-      duration: 60000, // Per 1 minute -> Strict 15 RPM cap!
-    },
+    connection: bullConnection,
+    concurrency: 2,
+    limiter: { max: 15, duration: 60000 }, // set to your real provider limits
   },
 );
 
-gradingWorker.on("completed", (job) => {
-  console.log(`✅ [Worker] Job ${job.id} completed successfully.`);
+gradingWorker.on("failed", async (job, err) => {
+  console.error(`❌ [Worker] Job ${job?.id} failed: ${err.message}`);
+  // after the last attempt, unlock the submission so the student can resubmit
+  if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
+    await Submission.findByIdAndUpdate(job.data.submissionId, {
+      $set: { status: job.data.prevStatus || "pending" },
+    });
+  }
 });
 
-gradingWorker.on("failed", (job, err) => {
-  console.error(`❌ [Worker] Job ${job.id} failed with error: ${err.message}`);
-});
+gradingWorker.on("error", (err) =>
+  console.error("❌ [Worker] error:", err.message),
+);
