@@ -1,3 +1,4 @@
+// workers/gradingWorker.js
 import "dotenv/config";
 import { Worker } from "bullmq";
 import Submission from "../models/Submission.js";
@@ -15,9 +16,17 @@ export const gradingWorker = new Worker(
     );
 
     // grade against what this student was assigned, not the whole pool
-    const sub =
-      await Submission.findById(submissionId).select("assignedQuestions");
-    const questions = sub?.assignedQuestions?.length
+    const sub = await Submission.findById(submissionId).select(
+      "assignedQuestions status",
+    );
+
+    // teacher already graded this manually while it waited -> nothing to do
+    if (!sub || sub.status !== "queued") {
+      console.log(`⏭️ [Worker] Skipping ${submissionId}: no longer queued`);
+      return;
+    }
+
+    const questions = sub.assignedQuestions?.length
       ? sub.assignedQuestions
       : assignment.questionPool;
 
@@ -30,7 +39,6 @@ export const gradingWorker = new Worker(
       preferredModel,
     });
 
-    // incomplete AI output -> throw so BullMQ retries instead of saving junk
     if (
       !result ||
       !result.scores ||
@@ -39,35 +47,65 @@ export const gradingWorker = new Worker(
       throw new Error("AI returned an incomplete evaluation");
     }
 
-    await Submission.findByIdAndUpdate(submissionId, {
-      $set: {
-        aiEvaluation: {
-          scores: result.scores,
-          totalScoreGivenByAI: result.totalScoreGivenByAI,
-          feedback: result.feedback,
+    // Conditional save: only if the submission is STILL queued, so a manual
+    // grade from the teacher can never be overwritten by a late AI result.
+    const saved = await Submission.findOneAndUpdate(
+      { _id: submissionId, status: "queued" },
+      {
+        $set: {
+          aiEvaluation: {
+            scores: result.scores,
+            totalScoreGivenByAI: result.totalScoreGivenByAI,
+            feedback: result.feedback,
+          },
+          status: "submitted",
+          submittedAt: new Date(),
         },
-        status: "submitted",
-        submittedAt: new Date(),
-        finalScoreOverride: null,
+        $unset: { gradingError: "" },
       },
-    });
+    );
 
-    console.log(`✅ [Worker] Saved grade for submission ${submissionId}`);
+    if (saved) {
+      console.log(`✅ [Worker] Saved grade for submission ${submissionId}`);
+    } else {
+      console.log(
+        `⏭️ [Worker] ${submissionId} was graded manually; AI result discarded`,
+      );
+    }
   },
   {
     connection: bullConnection,
     concurrency: 2,
-    limiter: { max: 15, duration: 60000 }, // set to your real provider limits
+    // ~9 jobs/min keeps one model under its 8,000 tokens-per-minute cap
+    limiter: { max: 9, duration: 60000 },
   },
 );
 
+// Runs after EVERY failed attempt. The student's answers stay saved and the
+// submission stays in the Queue; the teacher sees the exact error.
 gradingWorker.on("failed", async (job, err) => {
   console.error(`❌ [Worker] Job ${job?.id} failed: ${err.message}`);
-  // after the last attempt, unlock the submission so the student can resubmit
-  if (job && job.attemptsMade >= (job.opts.attempts ?? 1)) {
-    await Submission.findByIdAndUpdate(job.data.submissionId, {
-      $set: { status: job.data.prevStatus || "pending" },
-    });
+  if (!job) return;
+
+  const attempts = job.attemptsMade;
+  const final = attempts >= (job.opts.attempts ?? 1);
+
+  try {
+    await Submission.updateOne(
+      { _id: job.data.submissionId, status: "queued" },
+      {
+        $set: {
+          gradingError: {
+            message: String(err.message).slice(0, 1500),
+            at: new Date(),
+            attempts,
+            final,
+          },
+        },
+      },
+    );
+  } catch (dbErr) {
+    console.error("❌ [Worker] Could not record grading error:", dbErr.message);
   }
 });
 

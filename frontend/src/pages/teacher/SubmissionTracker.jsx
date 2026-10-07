@@ -7,6 +7,8 @@ import {
   getSubmissionDetailsAPI,
   overrideSubmissionScoreAPI,
   toggleResultPublishAPI,
+  reevaluateSubmissionAPI,
+  reevaluateStuckSubmissionsAPI,
 } from "../../services/api";
 import AssignmentEditorModal from "../../components/teacher/AssignmentEditorModal";
 import { getInitials } from "../../utils/getInitials";
@@ -29,6 +31,19 @@ const getAttachmentIcon = (fileType, url) => {
   return <FileText className="w-3.5 h-3.5 text-indigo-600 shrink-0" />;
 };
 
+const explainGradingError = (msg = "") => {
+  const m = msg.toLowerCase();
+  if (m.includes("per day"))
+    return "Daily AI limit reached. It resets later: use Evaluate after the reset, or give marks manually.";
+  if (m.includes("rate limit") || m.includes("429") || m.includes("per minute"))
+    return "AI providers are busy (rate limit). Try Evaluate again in a minute.";
+  if (m.includes("api key") || m.includes("401") || m.includes("403"))
+    return "An AI provider key is invalid or has no access.";
+  if (m.includes("grading queue"))
+    return "The grading queue was unreachable. Use Evaluate to retry.";
+  return "";
+};
+
 function SubmissionTracker() {
   const { assignmentId } = useParams();
   const navigate = useNavigate();
@@ -41,6 +56,9 @@ function SubmissionTracker() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
+  const [requeueingId, setRequeueingId] = useState(null);
+  const [isBulkRequeueing, setIsBulkRequeueing] = useState(false);
+  const [now, setNow] = useState(Date.now());
 
   const loadData = async () => {
     try {
@@ -69,6 +87,59 @@ function SubmissionTracker() {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentId]);
+
+  // quiet refresh: updates rows without the full-page spinner
+  const refreshSubmissions = async () => {
+    try {
+      const res = await getAssignmentSubmissionsAPI(assignmentId);
+      setSubmissions(res.data || []);
+    } catch (err) {
+      console.warn("Silent refresh failed:", err.message);
+    }
+  };
+
+  const hasQueued = submissions.some((s) => s.status === "queued");
+
+  // while anything waits for the AI, refresh every 15 seconds
+  useEffect(() => {
+    if (!hasQueued) return;
+    const timer = setInterval(refreshSubmissions, 15000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasQueued, assignmentId]);
+
+  // keeps the "waiting X min" labels fresh
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const handleEvaluateOne = async (submissionId) => {
+    setRequeueingId(submissionId);
+    try {
+      await reevaluateSubmissionAPI(submissionId);
+      await refreshSubmissions();
+    } catch (err) {
+      alert(err.response?.data?.message || "Could not re-send for evaluation.");
+    } finally {
+      setRequeueingId(null);
+    }
+  };
+
+  const handleEvaluateStuck = async () => {
+    setIsBulkRequeueing(true);
+    try {
+      const res = await reevaluateStuckSubmissionsAPI(assignmentId);
+      alert(res.data?.message || "Done.");
+      await refreshSubmissions();
+    } catch (err) {
+      alert(
+        err.response?.data?.message || "Could not re-send stuck submissions.",
+      );
+    } finally {
+      setIsBulkRequeueing(false);
+    }
+  };
 
   const handleTogglePublish = async () => {
     setIsPublishing(true);
@@ -116,15 +187,20 @@ function SubmissionTracker() {
   };
 
   const filteredRows = mergedRows.filter(({ submission }) => {
-    if (filter === "submitted")
-      return Boolean(submission && submission.status === "submitted");
+    if (filter === "submitted") return submission?.status === "submitted";
+    if (filter === "queued") return submission?.status === "queued";
     if (filter === "pending")
-      return !submission || submission.status !== "submitted";
+      return (
+        !submission || !["submitted", "queued"].includes(submission.status)
+      );
     return true;
   });
 
   const submittedCount = mergedRows.filter(
     ({ submission }) => submission?.status === "submitted",
+  ).length;
+  const queuedCount = mergedRows.filter(
+    ({ submission }) => submission?.status === "queued",
   ).length;
 
   if (isLoading) {
@@ -293,6 +369,7 @@ function SubmissionTracker() {
         {[
           { key: "all", label: `All (${mergedRows.length})` },
           { key: "submitted", label: `Submitted (${submittedCount})` },
+          { key: "queued", label: `Queue (${queuedCount})` },
           {
             key: "pending",
             label: `Not Submitted (${mergedRows.length - submittedCount})`,
@@ -312,6 +389,22 @@ function SubmissionTracker() {
         ))}
       </div>
 
+      {queuedCount > 0 && (
+        <div className="flex items-center justify-between gap-3 flex-wrap bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3">
+          <p className="text-xs sm:text-sm font-semibold text-indigo-800">
+            ⏳ {queuedCount} submission{queuedCount > 1 ? "s" : ""} waiting for
+            AI evaluation. This page refreshes automatically.
+          </p>
+          <button
+            onClick={handleEvaluateStuck}
+            disabled={isBulkRequeueing}
+            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm"
+          >
+            {isBulkRequeueing ? "Sending..." : "Evaluate all stuck"}
+          </button>
+        </div>
+      )}
+
       {/* Student Rows */}
       <div className="space-y-2.5">
         {filteredRows.length === 0 ? (
@@ -322,6 +415,7 @@ function SubmissionTracker() {
           filteredRows.map(({ student, submission }) => {
             const hasFlags = submission?.tabSwitchCount > 0;
             const isSubmitted = submission?.status === "submitted";
+            const isQueued = submission?.status === "queued";
             return (
               <div
                 key={student._id}
@@ -346,6 +440,22 @@ function SubmissionTracker() {
                     <p className="text-xs text-slate-400 truncate">
                       {student.email}
                     </p>
+
+                    {isQueued && submission.gradingError?.message && (
+                      <details className="mt-1">
+                        <summary className="text-[11px] font-bold text-red-600 cursor-pointer">
+                          ⚠️ Grading error •{" "}
+                          {submission.gradingError.final
+                            ? "gave up"
+                            : "retrying"}
+                        </summary>
+                        <p className="mt-1 text-[11px] text-red-700 bg-red-50 border border-red-100 rounded p-2 whitespace-pre-wrap break-words max-w-xl">
+                          {explainGradingError(submission.gradingError.message)}
+                          {"\n\n"}
+                          {submission.gradingError.message}
+                        </p>
+                      </details>
+                    )}
                   </div>
                 </div>
 
@@ -380,14 +490,56 @@ function SubmissionTracker() {
                     </span>
                   )}
 
+                  {isQueued &&
+                    (() => {
+                      const waitMin = submission.queuedAt
+                        ? Math.max(
+                            0,
+                            Math.floor(
+                              (now - new Date(submission.queuedAt).getTime()) /
+                                60000,
+                            ),
+                          )
+                        : null;
+                      const isStuck =
+                        submission.gradingError?.final ||
+                        (waitMin !== null && waitMin >= 15);
+                      return (
+                        <>
+                          {waitMin !== null && (
+                            <span className="text-[10px] font-bold text-slate-400">
+                              ⏳ {waitMin} min
+                            </span>
+                          )}
+                          {isStuck && (
+                            <button
+                              onClick={() => handleEvaluateOne(submission._id)}
+                              disabled={requeueingId === submission._id}
+                              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm"
+                            >
+                              {requeueingId === submission._id
+                                ? "Sending..."
+                                : "Evaluate"}
+                            </button>
+                          )}
+                        </>
+                      );
+                    })()}
+
                   <span
                     className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${
                       isSubmitted
                         ? "bg-emerald-100 text-emerald-700"
-                        : "bg-slate-100 text-slate-500"
+                        : isQueued
+                          ? "bg-indigo-100 text-indigo-700"
+                          : "bg-slate-100 text-slate-500"
                     }`}
                   >
-                    {isSubmitted ? "Submitted" : "Not Submitted"}
+                    {isSubmitted
+                      ? "Submitted"
+                      : isQueued
+                        ? "In Queue"
+                        : "Not Submitted"}
                   </span>
 
                   {isSubmitted && (
@@ -470,10 +622,19 @@ function SubmissionDetailModal({
         submissionId,
         overrideValue === "" ? null : parseFloat(overrideValue),
       );
-      setOverrideMsg("Score updated successfully.");
+      const wasQueued = submission?.status === "queued" && overrideValue !== "";
+      if (wasQueued)
+        setSubmission((prev) => ({ ...prev, status: "submitted" }));
+      setOverrideMsg(
+        wasQueued
+          ? "Marks saved. Submission is now marked as submitted."
+          : "Score updated successfully.",
+      );
       onOverrideSaved?.();
     } catch (err) {
-      setOverrideMsg("Failed to save override.");
+      setOverrideMsg(
+        `⚠️ ${err.response?.data?.message || "Failed to save override."}`,
+      );
     } finally {
       setIsSavingOverride(false);
     }
@@ -664,7 +825,13 @@ function SubmissionDetailModal({
                     {isSavingOverride ? "Saving..." : "Save Override"}
                   </button>
                   {overrideMsg && (
-                    <span className="text-xs font-semibold text-emerald-600">
+                    <span
+                      className={`text-xs font-semibold ${
+                        overrideMsg.startsWith("⚠️")
+                          ? "text-red-600"
+                          : "text-emerald-600"
+                      }`}
+                    >
                       {overrideMsg}
                     </span>
                   )}
@@ -673,6 +840,12 @@ function SubmissionDetailModal({
                   Students see this value in place of the AI score, shown
                   seamlessly as their final mark.
                 </p>
+                {submission.status === "queued" && (
+                  <p className="text-[11px] font-semibold text-indigo-600">
+                    This submission is still waiting for the AI. Saving marks
+                    here marks it as submitted and cancels the AI evaluation.
+                  </p>
+                )}
               </div>
             </>
           )}

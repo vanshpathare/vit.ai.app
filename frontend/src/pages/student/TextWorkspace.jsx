@@ -671,19 +671,15 @@ function TextWorkspace() {
   useEffect(() => {
     if (submission?.status !== "queued") return;
 
+    let ticks = 0;
     const timer = setInterval(async () => {
+      // stop polling after ~15 minutes (112 ticks x 8s); the answers stay saved
+      if (++ticks > 112) return clearInterval(timer);
+
       try {
         const res = await getSubmissionDetailsAPI(id);
         if (res.data?.status !== "queued") {
           setSubmission(res.data);
-
-          if (res.data?.status !== "submitted") {
-            // The worker gave up and unlocked the submission so the student can retry
-            setSubmitError(
-              "Evaluation could not be completed. Your answers are saved; please submit again.",
-            );
-            setIsSubmitting(false);
-          }
         }
       } catch (err) {
         console.warn("Status poll failed, retrying...", err.message);
@@ -692,7 +688,6 @@ function TextWorkspace() {
 
     return () => clearInterval(timer);
   }, [submission?.status, id]);
-
   // 🟢 Navigate back to this assignment's classroom feed directly (routed page),
   // falling back to the bare dashboard only if the classroom id isn't available.
   const goBackToDashboard = () => {

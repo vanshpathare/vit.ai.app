@@ -77,7 +77,7 @@ export const evaluateWithGemini = async (
 
     // Execute the generation request utilizing structural JSON enforcement
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: aiContentsPayload,
       config: {
         systemInstruction: systemInstruction,
@@ -162,7 +162,7 @@ export const generateQuestionsFromMaterial = async (
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: userPrompt,
       config: {
         systemInstruction: systemInstruction,
@@ -250,7 +250,7 @@ export const evaluateConversationTurn = async ({
     }
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: aiContentsPayload,
       config: {
         systemInstruction: systemInstruction,

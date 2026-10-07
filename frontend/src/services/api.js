@@ -111,5 +111,9 @@ export const getAssignmentSubmissionsAPI = (assignmentId, status) =>
 // 🟢 Teacher manually overrides a student's AI-given score
 export const overrideSubmissionScoreAPI = (submissionId, finalScoreOverride) =>
   API.put(`/submissions/override/${submissionId}`, { finalScoreOverride });
+export const reevaluateSubmissionAPI = (submissionId) =>
+  API.post(`/submissions/${submissionId}/reevaluate`);
+export const reevaluateStuckSubmissionsAPI = (assignmentId) =>
+  API.post(`/submissions/assignment/${assignmentId}/reevaluate-stuck`);
 
 export default API;

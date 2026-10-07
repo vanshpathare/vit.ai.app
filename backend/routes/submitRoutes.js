@@ -5,6 +5,8 @@ import {
   overrideSubmissionScore,
   getStudentSubmissionDetails,
   logSubmissionInfraction,
+  reevaluateSubmission,
+  reevaluateStuckSubmissions,
 } from "../controllers/submitController.js";
 import { protect, teacherOnly } from "../middleware/authMiddleware.js";
 import { upload } from "../middleware/uploadMiddleware.js";
@@ -22,6 +24,13 @@ router.post(
   vivaRateLimiter,
   upload.single("audio"),
   submitAssignment,
+);
+
+router.post("/:id/reevaluate", teacherOnly, reevaluateSubmission);
+router.post(
+  "/assignment/:assignmentId/reevaluate-stuck",
+  teacherOnly,
+  reevaluateStuckSubmissions,
 );
 
 // 2. Fetch the complete classroom grading roster sheet (Strictly Teacher role accounts)

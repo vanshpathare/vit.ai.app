@@ -43,8 +43,15 @@ const submissionSchema = new mongoose.Schema(
     // Operational Lifecycle State
     status: {
       type: String,
-      enum: ["pending", "submitted", "ongoing"],
+      enum: ["pending", "queued", "submitted", "ongoing"],
       default: "pending",
+    },
+    queuedAt: { type: Date },
+    gradingError: {
+      message: String,
+      at: Date,
+      attempts: Number,
+      final: Boolean,
     },
     submittedAt: {
       type: Date,
