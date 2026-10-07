@@ -372,7 +372,7 @@ function SubmissionTracker() {
           { key: "queued", label: `Queue (${queuedCount})` },
           {
             key: "pending",
-            label: `Not Submitted (${mergedRows.length - submittedCount})`,
+            label: `Not Submitted (${mergedRows.length - submittedCount - queuedCount})`,
           },
         ].map((tab) => (
           <button
@@ -542,12 +542,12 @@ function SubmissionTracker() {
                         : "Not Submitted"}
                   </span>
 
-                  {isSubmitted && (
+                  {(isSubmitted || isQueued) && (
                     <button
                       onClick={() => setSelectedSubmissionId(submission._id)}
                       className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm"
                     >
-                      Check
+                      {isQueued ? "Review & Grade" : "Check"}
                     </button>
                   )}
                 </div>
