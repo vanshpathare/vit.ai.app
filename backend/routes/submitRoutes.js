@@ -19,12 +19,7 @@ router.use(protect);
 
 // 1. Process and evaluate student work (Catches file binaries inside 'audio' fields dynamically)
 // Target URL: POST /api/submissions/execute
-router.post(
-  "/execute",
-  vivaRateLimiter,
-  upload.single("audio"),
-  submitAssignment,
-);
+router.post("/execute", vivaRateLimiter, upload.any(), submitAssignment);
 
 router.post("/:id/reevaluate", teacherOnly, reevaluateSubmission);
 router.post(

@@ -1,6 +1,6 @@
 import Resource from "../models/Resource.js";
-import { uploadToSupabase } from "../services/storageService.js";
-import { deleteFromSupabase } from "../services/storageService.js";
+// 🟢 NEW: Import Cloudflare R2 services instead of Supabase
+import { uploadToR2, deleteFromR2 } from "../services/r2Service.js";
 
 // GET all resources for the Classroom Files Tab
 export const getClassroomResources = async (req, res) => {
@@ -19,7 +19,7 @@ export const getClassroomResources = async (req, res) => {
   }
 };
 
-// POST new resource (Handles both Supabase File Upload & Direct Drive/YouTube Link)
+// POST new resource (Handles both Cloudflare R2 File Upload & Direct Drive/YouTube Link)
 export const createResource = async (req, res) => {
   try {
     const { classId } = req.params;
@@ -34,10 +34,16 @@ export const createResource = async (req, res) => {
     let finalUrl = url;
     let finalFileType = fileType || "file";
 
-    // 1. If a direct file is uploaded, push to Supabase Storage
+    // 1. If a direct file is uploaded, push to Cloudflare R2
     if (req.file) {
-      const uploadResult = await uploadToSupabase(req.file, title);
-      finalUrl = uploadResult?.fileUrl || uploadResult?.publicUrl;
+      const folderPath = `classrooms/${classId}/resources`;
+
+      finalUrl = await uploadToR2(
+        req.file.buffer,
+        req.file.originalname,
+        folderPath,
+        req.file.mimetype,
+      );
 
       // Auto-detect extension if fileType was not provided by frontend
       if (!fileType && req.file.originalname) {
@@ -94,9 +100,9 @@ export const deleteResource = async (req, res) => {
       return res.status(404).json({ message: "Resource not found" });
     }
 
-    // 2. If it's an uploaded file (Supabase), delete it from storage
+    // 2. If it's an uploaded file (Cloudflare R2), delete it from storage
     if (resource.resourceType === "file" && resource.url) {
-      await deleteFromSupabase(resource.url);
+      await deleteFromR2(resource.url);
     }
 
     // 3. Delete the record from MongoDB

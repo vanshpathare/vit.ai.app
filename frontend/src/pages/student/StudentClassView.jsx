@@ -106,6 +106,8 @@ function StudentClassView() {
 
       if (modality === "Speech-Only") {
         navigate(`/student/viva-workspace/${targetSubmissionId}`);
+      } else if (modality === "Upload") {
+        navigate(`/student/upload-workspace/${targetSubmissionId}`); // 🟢 ADD THIS LINE
       } else {
         navigate(`/student/text-workspace/${targetSubmissionId}`);
       }
@@ -147,6 +149,8 @@ function StudentClassView() {
 
       if (modality === "Speech-Only") {
         navigate(`/student/viva-workspace/${targetSubmissionId}`);
+      } else if (modality === "Upload") {
+        navigate(`/student/upload-workspace/${targetSubmissionId}`); // 🟢 ADD THIS LINE
       } else {
         navigate(`/student/text-workspace/${targetSubmissionId}`);
       }

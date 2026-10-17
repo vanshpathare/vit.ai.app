@@ -31,7 +31,7 @@ export const registerUser = async (req, res) => {
     // 🔒 2. STRONG PASSWORD SECURITY GUARDRAIL
     // Enforces: Min 8 chars, 1 uppercase, 1 lowercase, 1 number, and 1 special symbol
     const strongPasswordRegex =
-      /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&#])[A-Za-z\d@$!%*?&#]{8,}$/;
+      /^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@$!%*?&#_\/\-\(\)\[\]{}])[A-Za-z\d@$!%*?&#_\/\-\(\)\[\]{}]{8,}$/;
 
     if (!strongPasswordRegex.test(password)) {
       return res.status(400).json({

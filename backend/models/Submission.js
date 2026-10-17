@@ -13,6 +13,20 @@ const submissionSchema = new mongoose.Schema(
       required: true,
     },
 
+    uploadedFiles: [
+      {
+        fileUrl: { type: String, required: true }, // Cloudflare R2 public URL
+        fileName: { type: String },
+        fileType: {
+          type: String,
+          enum: ["image", "pdf"],
+          required: true,
+        }, // Explicitly separates camera images from PDF uploads
+        pageNumber: { type: Number, default: 1 }, // Keeps sequential order for grading
+        perceptualHash: { type: String, default: null },
+      },
+    ],
+
     // THE RANDOMIZATION SHIELD: Stores the specific question randomly selected for this student
     assignedQuestions: {
       type: [String],
@@ -38,6 +52,24 @@ const submissionSchema = new mongoose.Schema(
     tabSwitchCount: {
       type: Number,
       default: 0,
+    },
+
+    plagiarismClusterId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Submission",
+      default: null,
+    },
+    isVisualPlagiarism: {
+      type: Boolean,
+      default: false,
+    },
+    isTextPlagiarism: {
+      type: Boolean,
+      default: false,
+    },
+    plagiarismDetails: {
+      type: String,
+      default: "",
     },
 
     // Operational Lifecycle State

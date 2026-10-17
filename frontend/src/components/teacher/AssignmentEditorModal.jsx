@@ -35,6 +35,19 @@ function AssignmentEditorModal({
   const [speechQuestionCount, setSpeechQuestionCount] = useState(
     existingAssignment?.speechQuestionCount || 4,
   );
+  const [allowedUploadType, setAllowedUploadType] = useState(
+    existingAssignment?.uploadConfig?.allowedUploadType || "handwritten",
+  );
+  const [maxPages, setMaxPages] = useState(
+    existingAssignment?.uploadConfig?.maxPages || 10,
+  );
+  const [similarityThreshold, setSimilarityThreshold] = useState(
+    existingAssignment?.uploadConfig?.similarityThreshold || 85,
+  );
+  const [assignmentCode, setAssignmentCode] = useState(
+    existingAssignment?.assignmentCode || "",
+  );
+  const [questionPaperFile, setQuestionPaperFile] = useState(null);
   const [dueDate, setDueDate] = useState(
     toDatetimeLocal(existingAssignment?.dueDate),
   );
@@ -184,10 +197,19 @@ function AssignmentEditorModal({
     setSaveError("");
 
     const cleanQuestions = questions.map((q) => q.trim()).filter(Boolean);
-    if (cleanQuestions.length === 0) {
-      setSaveError("Add at least one question to the pool.");
+    if (
+      cleanQuestions.length === 0 &&
+      (modality !== "Upload" || !questionPaperFile)
+    ) {
+      setSaveError(
+        "Add at least one question to the pool or attach a question paper file.",
+      );
       return;
     }
+    const finalQuestions =
+      cleanQuestions.length > 0
+        ? cleanQuestions
+        : ["Refer to attached question file."];
     if (!title.trim()) {
       setSaveError("Please give this assignment a title.");
       return;
@@ -237,6 +259,22 @@ function AssignmentEditorModal({
         parseInt(speechQuestionCount) || 4,
       );
     }
+
+    if (modality === "Upload") {
+      formData.append("allowedUploadType", allowedUploadType);
+      formData.append("maxPages", parseInt(maxPages) || 10);
+      formData.append(
+        "similarityThreshold",
+        parseFloat(similarityThreshold) || 85,
+      );
+      if (assignmentCode.trim()) {
+        formData.append("assignmentCode", assignmentCode.trim());
+      }
+      if (questionPaperFile) {
+        formData.append("questionPaper", questionPaperFile);
+      }
+    }
+
     formData.append("dueDate", new Date(dueDate).toISOString());
     formData.append("totalMarks", parseFloat(totalMarks) || 0);
     formData.append("aiNotes", aiNotes.trim());
@@ -247,7 +285,7 @@ function AssignmentEditorModal({
     formData.append("allowMultipleSubmissions", allowMultipleSubmissions);
 
     // Arrays & Objects as JSON strings for FormData parsing
-    formData.append("questionPool", JSON.stringify(cleanQuestions));
+    formData.append("questionPool", JSON.stringify(finalQuestions));
     formData.append("evaluationCriteria", JSON.stringify(evaluationCriteria));
     formData.append("existingAttachments", JSON.stringify(existingAttachments));
     formData.append("newLinks", JSON.stringify(newLinks));
@@ -333,6 +371,7 @@ function AssignmentEditorModal({
               >
                 <option value="Text-Only">Text-Only</option>
                 <option value="Speech-Only">Speech-Only (Viva)</option>
+                <option value="Upload">Upload (Handwritten/Scanned)</option>
               </select>
             </div>
 
@@ -400,6 +439,82 @@ function AssignmentEditorModal({
               </select>
             </div>
           </div>
+
+          {modality === "Upload" && (
+            <div className="space-y-4 bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div>
+                <p className="text-sm font-bold text-slate-900">
+                  📄 Upload Modality Settings & Question Paper
+                </p>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  Configure limits for student file submissions under this
+                  upload workflow.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    Allowed Format
+                  </label>
+                  <select
+                    value={allowedUploadType}
+                    onChange={(e) => setAllowedUploadType(e.target.value)}
+                    className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
+                  >
+                    <option value="handwritten">Images</option>
+                    <option value="document">PDF</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    Max Pages
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={maxPages}
+                    onChange={(e) => setMaxPages(e.target.value)}
+                    className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    Assignment Code (Opt.)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Auto-generated if empty"
+                    value={assignmentCode}
+                    onChange={(e) => setAssignmentCode(e.target.value)}
+                    className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none uppercase"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                <label className="block text-[11px] font-bold text-slate-700">
+                  🟡 Attach Question Paper Document (PDF / Image / Word)
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf,image/*,.docx,.doc"
+                  onChange={(e) =>
+                    setQuestionPaperFile(e.target.files?.[0] || null)
+                  }
+                  className="text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-bold file:bg-orange-600 file:text-white hover:file:bg-orange-700"
+                />
+                {questionPaperFile && (
+                  <p className="text-[11px] text-emerald-600 font-semibold">
+                    📎 Selected: {questionPaperFile.name}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Publish toggle */}
           <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg p-4 gap-4">

@@ -50,9 +50,31 @@ const assignmentSchema = new mongoose.Schema(
 
     modality: {
       type: String,
-      enum: ["Text-Only", "Speech-Only"],
+      enum: ["Text-Only", "Speech-Only", "Upload"],
       required: true,
     },
+
+    uploadConfig: {
+      allowedUploadType: {
+        type: String,
+        enum: ["document", "handwritten"],
+        default: "handwritten",
+      },
+      maxPages: { type: Number, default: 10 },
+      similarityThreshold: { type: Number, default: 85 },
+    },
+
+    assignmentCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+      uppercase: true,
+      trim: true,
+      required: function () {
+        return this.modality === "Upload";
+      },
+    },
+
     speechQuestionCount: {
       type: Number,
       default: 4, // Default fallback limit for speech vitas if not specified

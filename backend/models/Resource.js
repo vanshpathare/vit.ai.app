@@ -23,7 +23,7 @@ const resourceSchema = new mongoose.Schema(
       default: "drive",
     },
     fileSize: {
-      type: Number, // In bytes (optional, for Supabase uploads)
+      type: Number, // In bytes (optional, for R2 uploads)
       default: 0,
     },
     // Links to the parent classroom

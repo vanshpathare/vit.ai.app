@@ -10,6 +10,7 @@ import StudentDashboard from "./pages/student/StudentDashboard";
 import StudentClassView from "./pages/student/StudentClassView";
 import TextWorkspace from "./pages/student/TextWorkspace";
 import VivaWorkspace from "./pages/student/VivaWorkspace";
+import UploadWorkspace from "./pages/student/UploadWorkspace";
 
 import ClassDetail from "./pages/teacher/ClassDetail";
 import SubmissionTracker from "./pages/teacher/SubmissionTracker";
@@ -114,6 +115,10 @@ function App() {
           <Route
             path="/student/viva-workspace/:id"
             element={<VivaWorkspace />}
+          />
+          <Route
+            path="/student/upload-workspace/:id"
+            element={<UploadWorkspace />}
           />
 
           <Route path="/teacher/class/:classId" element={<ClassDetail />} />

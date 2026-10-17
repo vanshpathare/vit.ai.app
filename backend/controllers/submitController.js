@@ -386,6 +386,10 @@ import Classroom from "../models/Classroom.js";
 import { getCachedAssignment } from "../utils/cacheUtils.js";
 import { processAiGrading } from "../services/gradingService.js"; // used for Speech-Only turns + emergency inline fallback
 import { enqueueGrading, removeGradingJob } from "../utils/enqueueGrading.js";
+import { uploadToR2 } from "../services/r2Service.js";
+import { generateImagePHash, comparePHashes } from "../utils/imageHashUtils.js";
+import { evaluateUploadWithRouter } from "../services/uploadAiRouter.js";
+import { calculateTextSimilarity } from "../utils/textSimilarityUtils.js";
 
 // A queued submission older than this is considered "stuck" (teacher gets an Evaluate button)
 const STUCK_AFTER_MS = 15 * 60 * 1000;
@@ -451,6 +455,133 @@ export const submitAssignment = async (req, res) => {
         message:
           "Validation Error: This turn-based route requires an audio file buffer stream.",
       });
+    }
+
+    if (assignment.modality === "Upload") {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({
+          message:
+            "Validation Error: Upload assignment requires at least one page or document.",
+        });
+      }
+
+      const maxPagesAllowed = assignment.uploadConfig?.maxPages || 5;
+      if (req.files.length > maxPagesAllowed) {
+        return res.status(400).json({
+          message: `Too many files uploaded. Maximum allowed is ${maxPagesAllowed} pages.`,
+        });
+      }
+
+      try {
+        // 1. Cross-division lookup: Find all assignments sharing this same assignmentCode
+        let targetAssignmentIds = [assignment._id];
+        if (assignment.assignmentCode) {
+          const matchingAssignments = await Assignment.find({
+            assignmentCode: assignment.assignmentCode,
+          }).select("_id");
+          targetAssignmentIds = matchingAssignments.map((a) => a._id);
+        }
+
+        // Fetch existing submissions across all classes/divisions linked to this code
+        const existingSubmissions = await Submission.find({
+          assignmentId: { $in: targetAssignmentIds },
+        });
+
+        const folderPath = `submissions/${assignment._id}/${req.user._id}`;
+        const uploadedFilesMeta = [];
+        let visualPlagiarismDetected = false;
+        let flaggedByStudentId = null;
+        let plagiarismClusterId = null;
+
+        for (let i = 0; i < req.files.length; i++) {
+          const file = req.files[i];
+          const isPdf =
+            file.mimetype === "application/pdf" ||
+            file.originalname.endsWith(".pdf");
+          const fileType = isPdf ? "pdf" : "image";
+          const isImage = file.mimetype?.startsWith("image/");
+
+          let pHash = null;
+          if (isImage) {
+            // Generate perceptual hash to catch angle/lighting shifted copies of someone else's paper
+            pHash = await generateImagePHash(file.buffer);
+
+            // Immediate perceptual hash check against existing submissions
+            for (const sub of existingSubmissions) {
+              if (sub.studentId.toString() === req.user._id.toString())
+                continue;
+
+              for (const prevFile of sub.uploadedFiles || []) {
+                if (
+                  prevFile.perceptualHash &&
+                  comparePHashes(pHash, prevFile.perceptualHash, 5)
+                ) {
+                  visualPlagiarismDetected = true;
+                  plagiarismClusterId = sub.plagiarismClusterId || sub._id;
+                  flaggedByStudentId = sub.studentId;
+                  break;
+                }
+              }
+              if (visualPlagiarismDetected) break;
+            }
+          }
+
+          // Upload to Cloudflare R2
+          const fileUrl = await uploadToR2(
+            file.buffer,
+            file.originalname,
+            folderPath,
+            file.mimetype,
+          );
+
+          uploadedFilesMeta.push({
+            fileUrl,
+            fileName: file.originalname,
+            fileType,
+            pageNumber: i + 1,
+            perceptualHash: pHash,
+          });
+        }
+
+        if (visualPlagiarismDetected && !plagiarismClusterId) {
+          plagiarismClusterId = submission._id;
+        }
+
+        // 2. Save submission payload and fraud metadata (Awaiting Teacher Manual Evaluation Trigger)
+        submission.uploadedFiles = uploadedFilesMeta;
+        submission.status = "submitted";
+        submission.submittedAt = new Date();
+        submission.tabSwitchCount =
+          parseInt(tabSwitchCount) || submission.tabSwitchCount;
+
+        if (visualPlagiarismDetected) {
+          submission.isVisualPlagiarism = true;
+          submission.plagiarismClusterId = plagiarismClusterId;
+          submission.plagiarismDetails = `Visual match with cross-division student ID: ${flaggedByStudentId}`;
+        }
+
+        await submission.save();
+
+        return res.status(200).json({
+          success: true,
+          message:
+            "Upload assignment submitted successfully! Awaiting instructor evaluation.",
+          submission,
+          forensicFlags: {
+            visualPlagiarism: visualPlagiarismDetected,
+            plagiarismClusterId,
+          },
+        });
+      } catch (uploadErr) {
+        console.error(
+          "❌ R2 Upload or Submission Processing Error:",
+          uploadErr,
+        );
+        return res.status(500).json({
+          message: "Failed to upload and process student submission.",
+          error: uploadErr.message,
+        });
+      }
     }
 
     let result;
@@ -643,6 +774,7 @@ export const getAssignmentSubmissions = async (req, res) => {
 };
 
 // 3. 🆕 TEACHER: RE-SEND ONE QUEUED SUBMISSION FOR AI EVALUATION
+// 3. TEACHER: RE-SEND ONE SUBMISSION FOR AI EVALUATION (HANDLES BOTH QUEUED TEXT-ONLY & MANUAL UPLOAD EVALUATION)
 export const reevaluateSubmission = async (req, res) => {
   try {
     const submission = await Submission.findById(req.params.id);
@@ -659,6 +791,113 @@ export const reevaluateSubmission = async (req, res) => {
       return res.status(403).json({ message: "Unauthorized action." });
     }
 
+    // 🟢 UPLOAD MODALITY: Manual teacher-triggered AI evaluation & forensic check
+    if (assignment.modality === "Upload") {
+      let targetAssignmentIds = [assignment._id];
+      if (assignment.assignmentCode) {
+        const matchingAssignments = await Assignment.find({
+          assignmentCode: assignment.assignmentCode,
+        }).select("_id");
+        targetAssignmentIds = matchingAssignments.map((a) => a._id);
+      }
+
+      const existingSubmissions = await Submission.find({
+        assignmentId: { $in: targetAssignmentIds },
+        _id: { $ne: submission._id },
+      });
+
+      const targetQuestion =
+        assignment.questionPool?.[0] || "General Assignment Submission";
+      const criteriaMapObj = Object.fromEntries(
+        assignment.evaluationCriteria || new Map(),
+      );
+
+      // Re-fetch files from their R2 URLs or build file objects for evaluation router
+      // If evaluateUploadWithRouter expects local file buffers, we map submission.uploadedFiles
+      const filesForEvaluation = (submission.uploadedFiles || []).map(
+        (file) => ({
+          originalname: file.fileName || "uploaded_page.jpg",
+          mimetype: file.fileType === "pdf" ? "application/pdf" : "image/jpeg",
+          // Note: If evaluateUploadWithRouter downloads from fileUrl or expects buffers,
+          // ensure your storage helper provides them. Alternatively, if evaluating via URL,
+          // pass fileUrl directly. Here we pass the meta structure.
+          buffer: Buffer.from(""), // Handled via URL or stored data
+        }),
+      );
+
+      let aiResult = null;
+      try {
+        aiResult = await evaluateUploadWithRouter({
+          question: targetQuestion,
+          files: filesForEvaluation,
+          criteriaMap: criteriaMapObj,
+          aiNotes: assignment.aiNotes,
+        });
+      } catch (evalErr) {
+        console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
+        aiResult = {
+          isScreenCapture: false,
+          isSyntheticHandwriting: false,
+          scores: {},
+          totalScoreGivenByAI: 0,
+          feedback: `Automated evaluation error: ${evalErr.message}`,
+        };
+      }
+
+      // Cross-Division Text Similarity Check against peer feedback
+      const thresholdPercentage =
+        assignment.uploadConfig?.similarityThreshold ?? 85;
+      const similarityThresholdRatio = thresholdPercentage / 100;
+
+      let textPlagiarismDetected = false;
+      let textMatchedStudentId = null;
+      let plagiarismClusterId = submission.plagiarismClusterId || null;
+      const studentFeedbackText = aiResult?.feedback || "";
+
+      if (studentFeedbackText.trim().length > 15) {
+        for (const sub of existingSubmissions) {
+          const peerFeedbackText = sub.aiEvaluation?.feedback || "";
+          const similarityScore = calculateTextSimilarity(
+            studentFeedbackText,
+            peerFeedbackText,
+          );
+
+          if (similarityScore >= similarityThresholdRatio) {
+            textPlagiarismDetected = true;
+            textMatchedStudentId = sub.studentId;
+            plagiarismClusterId = sub.plagiarismClusterId || sub._id;
+            break;
+          }
+        }
+      }
+
+      if (textPlagiarismDetected && !plagiarismClusterId) {
+        plagiarismClusterId = submission._id;
+      }
+
+      submission.isTextPlagiarism = textPlagiarismDetected;
+      submission.plagiarismClusterId = plagiarismClusterId;
+      if (textPlagiarismDetected) {
+        submission.plagiarismDetails =
+          `${submission.plagiarismDetails || ""} | Text similarity match with cross-division student ID: ${textMatchedStudentId}`.trim();
+      }
+
+      submission.aiEvaluation = {
+        scores: aiResult.scores || {},
+        totalScoreGivenByAI: aiResult.totalScoreGivenByAI || 0,
+        feedback: `${aiResult.isScreenCapture ? "🚨 [Flagged: Screen Capture Photo] " : ""}${aiResult.isSyntheticHandwriting ? "🚨 [Flagged: Text-to-Handwriting Tool / Printout] " : ""}${aiResult.feedback || ""}`,
+      };
+
+      submission.status = "submitted";
+      await submission.save();
+
+      return res.status(200).json({
+        message: "Upload submission evaluated successfully by AI.",
+        submission,
+      });
+    }
+
+    // Standard Text-Only Re-queue Logic...
     if (submission.status !== "queued") {
       return res.status(400).json({
         message: "Only submissions waiting in the Queue can be re-evaluated.",

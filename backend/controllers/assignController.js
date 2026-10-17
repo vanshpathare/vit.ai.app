@@ -5,16 +5,19 @@ import Submission from "../models/Submission.js";
 import Classroom from "../models/Classroom.js";
 import { generateQuestionsFromMaterial } from "../services/geminiService.js";
 import { createRequire } from "module";
+import mongoose from "mongoose";
 import { deleteFromSupabase } from "../services/storageService.js";
 import { uploadToSupabase } from "../services/storageService.js";
 import {
   getCachedAssignment,
   invalidateAssignmentCache,
 } from "../utils/cacheUtils.js";
+import { uploadToR2, deleteFromR2 } from "../services/r2Service.js";
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
 import mammoth from "mammoth";
 import PDFParser from "pdf2json";
+import crypto from "crypto";
 
 // 1. CREATE AND BULK-DISTRIBUTE ASSIGNMENT (Teacher Only - Push Architecture)
 // export const createAssignment = async (req, res) => {
@@ -142,9 +145,14 @@ export const createAssignment = async (req, res) => {
       questionsPerStudent,
       isResultPublished,
       allowMultipleSubmissions,
+      assignmentCode,
+      allowedUploadType,
+      maxPages,
+      similarityThreshold,
     } = req.body;
 
-    // 🟢 1. PARSE JSON STRINGS FROM FORMDATA
+    // 🟢 PARSE JSON STRINGS FROM FORMDATA
+
     let parsedQuestionPool = [];
     let parsedEvaluationCriteria = {};
     let parsedExistingAttachments = [];
@@ -190,26 +198,67 @@ export const createAssignment = async (req, res) => {
       });
     }
 
-    // 🟢 3. VALIDATION CHECK
+    // 🟢 3. VALIDATION CHECK (Bypasses manual question requirement if questionPaper is attached)
+    const hasQuestionPaper =
+      req.files &&
+      req.files["questionPaper"] &&
+      req.files["questionPaper"].length > 0;
+
     if (
-      !parsedQuestionPool ||
-      !Array.isArray(parsedQuestionPool) ||
-      parsedQuestionPool.length === 0
+      (!parsedQuestionPool ||
+        !Array.isArray(parsedQuestionPool) ||
+        parsedQuestionPool.length === 0) &&
+      !hasQuestionPaper
     ) {
-      return res
-        .status(400)
-        .json({ message: "Assignment requires a valid question pool array." });
+      return res.status(400).json({
+        message:
+          "Assignment requires a valid question pool array or an attached question paper.",
+      });
     }
+
+    const finalQuestionPool =
+      parsedQuestionPool.length > 0
+        ? parsedQuestionPool
+        : ["Refer to attached question paper."];
 
     const countPerStudent = parseInt(questionsPerStudent) || 1;
 
-    // 🟢 4. ATTACHMENT PROCESSING PIPELINE
+    // 🟢 4. ATTACHMENT PROCESSING PIPELINE (Cloudflare R2) (Handles upload.fields structure)
+    const assignmentId = new mongoose.Types.ObjectId(); // Generate ID upfront for folder path
     const fileAttachments = [];
-    if (req.files && req.files.length > 0) {
-      for (const file of req.files) {
-        // Upload binary buffer to Supabase / cloud storage
-        const uploadResult = await uploadToSupabase(file, file.originalname);
-        const fileUrl = uploadResult?.fileUrl || uploadResult;
+
+    // A. Handle dedicated Question Paper file upload (req.files.questionPaper)
+    const questionPaperFiles = req.files?.["questionPaper"] || [];
+    if (questionPaperFiles.length > 0) {
+      const qPaperFile = questionPaperFiles[0];
+      const qPaperPath = `assignments/${assignmentId}/question-paper`;
+      const qPaperUrl = await uploadToR2(
+        qPaperFile.buffer,
+        qPaperFile.originalname,
+        qPaperPath,
+        qPaperFile.mimetype,
+      );
+
+      fileAttachments.push({
+        resourceType: "file",
+        url: qPaperUrl,
+        fileName: `[Question Paper] ${qPaperFile.originalname}`,
+        fileType:
+          qPaperFile.originalname.split(".").pop()?.toLowerCase() || "file",
+      });
+    }
+
+    // B. Handle general reference attachments (req.files.files)
+    const generalFiles = req.files?.["files"] || [];
+    if (generalFiles.length > 0) {
+      const folderPath = `assignments/${assignmentId}/teacher-attachments`;
+      for (const file of generalFiles) {
+        const fileUrl = await uploadToR2(
+          file.buffer,
+          file.originalname,
+          folderPath,
+          file.mimetype,
+        );
 
         fileAttachments.push({
           resourceType: "file",
@@ -240,9 +289,10 @@ export const createAssignment = async (req, res) => {
 
     // 🟢 5. CREATE MASTER ASSIGNMENT
     const assignment = await Assignment.create({
+      _id: assignmentId,
       classId,
       title,
-      questionPool: parsedQuestionPool,
+      questionPool: finalQuestionPool,
       questionsPerStudent: countPerStudent,
       modality,
       totalMarks: parseFloat(totalMarks) || 0,
@@ -257,11 +307,22 @@ export const createAssignment = async (req, res) => {
       allowMultipleSubmissions:
         allowMultipleSubmissions === "true" ||
         allowMultipleSubmissions === true,
+      ...(modality === "Upload" && {
+        assignmentCode:
+          assignmentCode && assignmentCode.trim() !== ""
+            ? assignmentCode.toUpperCase()
+            : "UP-" + crypto.randomBytes(3).toString("hex").toUpperCase(),
+        uploadConfig: {
+          allowedUploadType: allowedUploadType || "handwritten",
+          maxPages: parseInt(maxPages) || 5,
+          similarityThreshold: parseFloat(similarityThreshold) || 85,
+        },
+      }),
     });
 
     // 🏎️ 6. AUTOMATED BULK DISTRIBUTION PIPELINE
     if (classroom.studentsEnrolled && classroom.studentsEnrolled.length > 0) {
-      const uniformQuestion = [...parsedQuestionPool];
+      const uniformQuestion = [...finalQuestionPool];
 
       const submissionDocs = classroom.studentsEnrolled.map((studentId) => {
         let assignedQuestionsArray = [];
@@ -269,12 +330,12 @@ export const createAssignment = async (req, res) => {
         if (distributionType === "same-for-all") {
           assignedQuestionsArray = uniformQuestion;
         } else {
-          const shuffledPool = [...parsedQuestionPool].sort(
+          const shuffledPool = [...finalQuestionPool].sort(
             () => 0.5 - Math.random(),
           );
           assignedQuestionsArray = shuffledPool.slice(
             0,
-            Math.min(countPerStudent, parsedQuestionPool.length),
+            Math.min(countPerStudent, finalQuestionPool.length),
           );
         }
 
@@ -535,6 +596,10 @@ export const updateAssignmentSettings = async (req, res) => {
       questionsPerStudent,
       isResultPublished,
       allowMultipleSubmissions,
+      assignmentCode,
+      allowedUploadType,
+      maxPages,
+      similarityThreshold,
     } = req.body;
 
     let parsedQuestionPool = assignment.questionPool;
@@ -570,12 +635,41 @@ export const updateAssignmentSettings = async (req, res) => {
           : req.body.newLinks;
     }
 
-    // 🟢 4. PROCESS NEW UPLOADED FILES (req.files from Multer)
+    // 🟢 4. PROCESS NEW UPLOADED FILES & QUESTION PAPER (Cloudflare R2 - Handles upload.fields structure)
     const newFileAttachments = [];
-    if (req.files && req.files.length > 0) {
-      for (const file of req.files) {
-        const uploadResult = await uploadToSupabase(file, file.originalname);
-        const fileUrl = uploadResult?.fileUrl || uploadResult;
+
+    // A. Handle dedicated Question Paper file upload update (req.files.questionPaper)
+    const questionPaperFiles = req.files?.["questionPaper"] || [];
+    if (questionPaperFiles.length > 0) {
+      const qPaperFile = questionPaperFiles[0];
+      const qPaperPath = `assignments/${id}/question-paper`;
+      const qPaperUrl = await uploadToR2(
+        qPaperFile.buffer,
+        qPaperFile.originalname,
+        qPaperPath,
+        qPaperFile.mimetype,
+      );
+
+      newFileAttachments.push({
+        resourceType: "file",
+        url: qPaperUrl,
+        fileName: `[Question Paper] ${qPaperFile.originalname}`,
+        fileType:
+          qPaperFile.originalname.split(".").pop()?.toLowerCase() || "file",
+      });
+    }
+
+    // B. Handle general reference attachments (req.files.files)
+    const generalFiles = req.files?.["files"] || [];
+    if (generalFiles.length > 0) {
+      const folderPath = `assignments/${id}/teacher-attachments`;
+      for (const file of generalFiles) {
+        const fileUrl = await uploadToR2(
+          file.buffer,
+          file.originalname,
+          folderPath,
+          file.mimetype,
+        );
 
         newFileAttachments.push({
           resourceType: "file",
@@ -597,7 +691,7 @@ export const updateAssignmentSettings = async (req, res) => {
           : "drive",
     }));
 
-    // Combine: Kept Attachments + New Links + Newly Uploaded Files
+    // Combine: Kept Attachments + New Links + Newly Uploaded Files & Question Papers
     const finalAttachments = [
       ...parsedExistingAttachments,
       ...formattedNewLinks,
@@ -622,6 +716,18 @@ export const updateAssignmentSettings = async (req, res) => {
       questionsPerStudent !== undefined
         ? parseInt(questionsPerStudent)
         : assignment.questionsPerStudent;
+
+    if (assignment.modality === "Upload") {
+      if (!assignment.uploadConfig) assignment.uploadConfig = {};
+      if (allowedUploadType)
+        assignment.uploadConfig.allowedUploadType = allowedUploadType;
+      if (maxPages) assignment.uploadConfig.maxPages = parseInt(maxPages);
+      if (similarityThreshold)
+        assignment.uploadConfig.similarityThreshold =
+          parseFloat(similarityThreshold);
+      if (assignmentCode)
+        assignment.assignmentCode = assignmentCode.toUpperCase();
+    }
 
     if (isResultPublished !== undefined) {
       assignment.isResultPublished =
@@ -769,11 +875,11 @@ export const deleteAssignment = async (req, res) => {
       return res.status(404).json({ message: "Assignment not found." });
     }
 
-    // 1. Clean up all attached Supabase files for this assignment
+    // 1. Clean up all attached Cloudflare R2 files for this assignment
     if (assignment.attachments && assignment.attachments.length > 0) {
       for (const attachment of assignment.attachments) {
         if (attachment.resourceType === "file" && attachment.url) {
-          await deleteFromSupabase(attachment.url);
+          await deleteFromR2(attachment.url);
         }
       }
     }
