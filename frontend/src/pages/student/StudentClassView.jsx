@@ -142,6 +142,10 @@ function StudentClassView() {
     try {
       setIsLaunchingWorkspace(true);
       const response = await initializeSubmissionAPI(assignmentId);
+
+      console.log("🔍 API Response Data:", response.data);
+      console.log("🔍 Detected Modality:", response.data.modality);
+
       const targetSubmissionId = response.data.submissionId;
       const modality = response.data.modality || "Text-Only";
 
