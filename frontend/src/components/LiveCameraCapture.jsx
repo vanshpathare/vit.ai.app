@@ -19,6 +19,9 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
       setIsCameraActive(true);
       if (videoRef.current) {
         videoRef.current.srcObject = mediaStream;
+        videoRef.current.play().catch((err) => {
+          console.warn("Video play auto-resume error:", err);
+        });
       }
     } catch (err) {
       console.error("Camera access error:", err);
