@@ -7,6 +7,7 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
   const [stream, setStream] = useState(null);
   const [capturedImages, setCapturedImages] = useState([]);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   // Start camera stream
   const startCamera = async () => {
@@ -17,6 +18,7 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
       });
       setStream(mediaStream);
       setIsCameraActive(true);
+      setTorchOn(false); // Reset torch state on open
     } catch (err) {
       console.error("Camera access error:", err);
       alert(
@@ -35,13 +37,40 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
     }
   }, [isCameraActive, stream]);
 
+  // Toggle Flashlight (Torch)
+  const toggleTorch = async () => {
+    if (!stream) return;
+    const videoTrack = stream.getVideoTracks()[0];
+    try {
+      const capabilities = videoTrack.getCapabilities();
+      if (capabilities.torch) {
+        await videoTrack.applyConstraints({
+          advanced: [{ torch: !torchOn }],
+        });
+        setTorchOn(!torchOn);
+      } else {
+        alert("Flashlight (torch) is not supported on this device/browser.");
+      }
+    } catch (err) {
+      console.error("Error toggling torch:", err);
+    }
+  };
+
   // Stop camera stream
   const stopCamera = () => {
     if (stream) {
+      // Turn off torch before stopping if active
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack
+          .applyConstraints({ advanced: [{ torch: false }] })
+          .catch(() => {});
+      }
       stream.getTracks().forEach((track) => track.stop());
       setStream(null);
     }
     setIsCameraActive(false);
+    setTorchOn(false);
   };
 
   // Capture frame from video feed safely with fallback dimensions
@@ -75,7 +104,7 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
           ];
           setCapturedImages(newImages);
           onCapture(newImages.map((img) => img.file));
-          stopCamera(); // Auto-close camera modal after capture or keep open? Let's close modal to review thumbnail.
+          stopCamera(); // Close camera overlay after successful snap
         },
         "image/jpeg",
         0.85,
@@ -97,7 +126,7 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
 
   return (
     <div className="space-y-4">
-      {/* Trigger Button */}
+      {/* Trigger Button Card */}
       <div className="text-center p-6 border-2 border-dashed border-orange-300 bg-orange-50/50 rounded-2xl">
         <Camera className="w-10 h-10 text-orange-600 mx-auto mb-2" />
         <h4 className="text-sm font-bold text-slate-800">
@@ -115,7 +144,7 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
         </button>
       </div>
 
-      {/* 🟢 FULL-SCREEN OVERLAY MODAL FOR CAMERA VIEW */}
+      {/* FULL-SCREEN OVERLAY MODAL FOR CAMERA VIEW */}
       {isCameraActive && (
         <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-between p-4 overflow-hidden">
           {/* Top Bar */}
@@ -143,8 +172,21 @@ function LiveCameraCapture({ onCapture, maxPages = 5 }) {
             />
           </div>
 
-          {/* Bottom Floating Shutter Controls */}
-          <div className="w-full py-6 flex items-center justify-center gap-6 z-10 bg-gradient-to-t from-black/80 to-transparent">
+          {/* Bottom Floating Shutter & Flash Controls */}
+          <div className="w-full py-6 flex items-center justify-center gap-4 z-10 bg-gradient-to-t from-black/80 to-transparent">
+            {/* Flashlight Toggle Button */}
+            <button
+              onClick={toggleTorch}
+              className={`p-4 rounded-full font-bold text-sm shadow-2xl flex items-center justify-center transition-all cursor-pointer ${
+                torchOn
+                  ? "bg-amber-400 text-slate-900 shadow-amber-400/50"
+                  : "bg-white/20 text-white"
+              }`}
+              title="Toggle Flash"
+            >
+              ⚡
+            </button>
+
             <button
               onClick={captureSnapshot}
               className="px-8 py-4 bg-white text-slate-900 rounded-full font-extrabold text-sm shadow-2xl flex items-center gap-3 hover:bg-orange-50 active:scale-95 transition-all cursor-pointer"
