@@ -4,13 +4,13 @@ import {
   getAssignmentByIdAPI,
   getClassroomDetailsAPI,
   getAssignmentSubmissionsAPI,
-  getSubmissionDetailsAPI,
-  overrideSubmissionScoreAPI,
   toggleResultPublishAPI,
   reevaluateSubmissionAPI,
   reevaluateStuckSubmissionsAPI,
+  reevaluateQueuedUploadsAPI,
 } from "../../services/api";
 import AssignmentEditorModal from "../../components/teacher/AssignmentEditorModal";
+import SubmissionDetailModal from "../../components/teacher/SubmissionDetailModal"; // 🟢 Dedicated modal component import
 import { getInitials } from "../../utils/getInitials";
 import { compareRollNumbers } from "../../utils/rollNumberSort";
 import {
@@ -115,7 +115,7 @@ function UploadSubmissionTracker() {
   const handleEvaluateStuck = async () => {
     setIsBulkRequeueing(true);
     try {
-      const res = await reevaluateStuckSubmissionsAPI(assignmentId);
+      const res = await reevaluateQueuedUploadsAPI(assignmentId);
       alert(res.data?.message || "Done.");
       await refreshSubmissions();
     } catch (err) {
@@ -237,7 +237,7 @@ function UploadSubmissionTracker() {
                 `/teacher/class/${assignment.classId?._id || assignment.classId}`,
               )
             }
-            className="text-slate-400 hover:text-orange-600 font-bold text-lg shrink-0 mt-0.5"
+            className="text-slate-400 hover:text-orange-600 font-bold text-lg shrink-0 mt-0.5 cursor-pointer"
           >
             ‹
           </button>
@@ -259,7 +259,7 @@ function UploadSubmissionTracker() {
                 hour: "2-digit",
                 minute: "2-digit",
               })}{" "}
-              • {assignment.totalMarks} marks •{" "}
+              - {assignment.totalMarks} marks •{" "}
               {assignment.assignmentCode && (
                 <span className="font-mono text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded border border-orange-100 ml-1">
                   Code: {assignment.assignmentCode}
@@ -273,7 +273,7 @@ function UploadSubmissionTracker() {
           <button
             onClick={handleTogglePublish}
             disabled={isPublishing}
-            className={`flex-1 sm:flex-none px-3.5 py-2 text-xs font-bold rounded-lg shadow-sm transition-colors border ${
+            className={`flex-1 sm:flex-none px-3.5 py-2 text-xs font-bold rounded-lg shadow-sm transition-colors border cursor-pointer ${
               assignment.isResultPublished
                 ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
                 : "bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"
@@ -285,7 +285,7 @@ function UploadSubmissionTracker() {
           </button>
           <button
             onClick={() => setIsEditorOpen(true)}
-            className="flex-1 sm:flex-none px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm transition-colors"
+            className="flex-1 sm:flex-none px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm transition-colors cursor-pointer"
           >
             Edit Settings
           </button>
@@ -378,7 +378,7 @@ function UploadSubmissionTracker() {
           <button
             key={tab.key}
             onClick={() => setFilter(tab.key)}
-            className={`px-3 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 ${
+            className={`px-3 py-2 text-xs font-bold rounded-lg transition-all whitespace-nowrap shrink-0 cursor-pointer ${
               filter === tab.key
                 ? "bg-white text-orange-600 shadow-sm"
                 : "text-slate-500 hover:text-orange-500"
@@ -398,7 +398,7 @@ function UploadSubmissionTracker() {
           <button
             onClick={handleEvaluateStuck}
             disabled={isBulkRequeueing}
-            className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm"
+            className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
           >
             {isBulkRequeueing ? "Evaluating..." : "Evaluate all queued"}
           </button>
@@ -500,13 +500,12 @@ function UploadSubmissionTracker() {
 
                   {(isSubmitted || isQueued) && (
                     <div className="flex items-center gap-2">
-                      {/* 🟢 Teacher manually triggers the multimodal AI evaluation router */}
                       <button
                         onClick={async () => {
                           try {
-                            await reevaluateSubmissionAPI(submission._id);
+                            await handleEvaluateOne(submission._id);
                             alert("AI evaluation completed successfully!");
-                            loadData(); // Refresh roster and submission states
+                            loadData();
                           } catch (err) {
                             alert(
                               err.response?.data?.message ||
@@ -514,14 +513,14 @@ function UploadSubmissionTracker() {
                             );
                           }
                         }}
-                        className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm"
+                        className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
                       >
                         Run AI Evaluation 🤖
                       </button>
 
                       <button
                         onClick={() => setSelectedSubmissionId(submission._id)}
-                        className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm"
+                        className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
                       >
                         Review Work
                       </button>
@@ -554,162 +553,6 @@ function UploadSubmissionTracker() {
           onOverrideSaved={loadData}
         />
       )}
-    </div>
-  );
-}
-
-// 🔍 Detail Modal for Uploads
-function SubmissionDetailModal({
-  submissionId,
-  totalMarks,
-  onClose,
-  onOverrideSaved,
-}) {
-  const [submission, setSubmission] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [overrideValue, setOverrideValue] = useState("");
-  const [isSavingOverride, setIsSavingOverride] = useState(false);
-  const [overrideMsg, setOverrideMsg] = useState("");
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setIsLoading(true);
-        const res = await getSubmissionDetailsAPI(submissionId);
-        setSubmission(res.data);
-        setOverrideValue(
-          res.data.finalScoreOverride ??
-            res.data.aiEvaluation?.totalScoreGivenByAI ??
-            "",
-        );
-      } catch (err) {
-        console.error("Failed to load detail:", err);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    load();
-  }, [submissionId]);
-
-  const handleSaveOverride = async () => {
-    setIsSavingOverride(true);
-    setOverrideMsg("");
-    try {
-      await overrideSubmissionScoreAPI(
-        submissionId,
-        overrideValue === "" ? null : parseFloat(overrideValue),
-      );
-      setOverrideMsg("Score updated successfully.");
-      onOverrideSaved?.();
-    } catch (err) {
-      setOverrideMsg(
-        `⚠️ ${err.response?.data?.message || "Failed to save override."}`,
-      );
-    } finally {
-      setIsSavingOverride(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
-      <div
-        className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm"
-        onClick={onClose}
-      ></div>
-      <div className="bg-white border border-slate-200 w-full max-w-3xl max-h-[95vh] rounded-xl shadow-2xl relative z-10 flex flex-col overflow-hidden">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200 shrink-0">
-          <div>
-            <h3 className="text-base font-bold text-slate-900">
-              {submission?.studentId?.name || "Student"} — Upload Forensic
-              Review
-            </h3>
-            <p className="text-xs text-slate-400">
-              {submission?.studentId?.email}
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 font-semibold text-lg"
-          >
-            ✕
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          {isLoading || !submission ? (
-            <div className="py-16 text-center text-xs font-medium text-slate-400">
-              Loading submission...
-            </div>
-          ) : (
-            <>
-              {/* Uploaded Files Preview */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-black text-slate-400 uppercase tracking-wider">
-                  Submitted Pages / Files
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {submission.uploadedFiles?.map((file, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-xl"
-                    >
-                      <span className="text-xs font-bold text-slate-800 truncate">
-                        {file.fileName || `Page ${file.pageNumber}`}
-                      </span>
-                      <a
-                        href={file.fileUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-bold text-orange-600 hover:underline shrink-0 ml-2"
-                      >
-                        View File ↗
-                      </a>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* AI & Forensic Report */}
-              <div className="bg-slate-900 text-slate-100 rounded-xl p-5 space-y-2">
-                <p className="text-orange-400 font-bold text-xs uppercase tracking-wide">
-                  🤖 AI Forensic & Evaluation Report
-                </p>
-                <p className="text-sm text-slate-300 whitespace-pre-wrap leading-relaxed">
-                  {submission.aiEvaluation?.feedback || "No feedback recorded."}
-                </p>
-              </div>
-
-              {/* Manual Override */}
-              <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
-                <p className="text-sm font-bold text-slate-800">
-                  Manual Score Override
-                </p>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="number"
-                    value={overrideValue}
-                    onChange={(e) => setOverrideValue(e.target.value)}
-                    placeholder={`out of ${totalMarks}`}
-                    className="w-32 h-9 px-3 text-sm bg-slate-50 border border-slate-200 rounded focus:bg-white focus:border-orange-600 focus:outline-none"
-                  />
-                  <button
-                    onClick={handleSaveOverride}
-                    disabled={isSavingOverride}
-                    className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm"
-                  >
-                    {isSavingOverride ? "Saving..." : "Save Override"}
-                  </button>
-                  {overrideMsg && (
-                    <span className="text-xs font-semibold text-emerald-600">
-                      {overrideMsg}
-                    </span>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
     </div>
   );
 }

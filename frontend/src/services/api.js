@@ -115,5 +115,7 @@ export const reevaluateSubmissionAPI = (submissionId) =>
   API.post(`/submissions/${submissionId}/reevaluate`);
 export const reevaluateStuckSubmissionsAPI = (assignmentId) =>
   API.post(`/submissions/assignment/${assignmentId}/reevaluate-stuck`);
+export const reevaluateQueuedUploadsAPI = (assignmentId) =>
+  axiosInstance.post(`/assignments/${assignmentId}/reevaluate-uploads`);
 
 export default API;

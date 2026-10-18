@@ -1,388 +1,7 @@
-// //submitController.js
-// import Submission from "../models/Submission.js";
-// import Classroom from "../models/Classroom.js";
-// import { getCachedAssignment } from "../utils/cacheUtils.js";
-// import { processAiGrading } from "../services/gradingService.js"; // 👈 Import the fail-safe grading service wrapper
-// import { gradingQueue } from "../utils/gradingQueue.js"; // 👈 Make sure to import your queue
-// import { toCriteriaMap } from "../utils/criteriaUtils.js";
-
-// const STUCK_AFTER_MS = 15 * 60 * 1000;
-
-// const teacherOwnsAssignment = (assignment, teacherId) =>
-//   Classroom.exists({ _id: assignment.classId, teacherId });
-
-// const withTimeout = (promise, ms, label) =>
-//   Promise.race([
-//     promise,
-//     new Promise((_, reject) =>
-//       setTimeout(() => reject(new Error(`${label} timed out`)), ms),
-//     ),
-//   ]);
-
-// export const submitAssignment = async (req, res) => {
-//   const { submissionId, responses, tabSwitchCount, preferredModel } = req.body;
-
-//   try {
-//     const submission = await Submission.findById(submissionId);
-//     if (!submission) {
-//       return res
-//         .status(404)
-//         .json({ message: "Target submission record not located." });
-//     }
-
-//     const assignment = await getCachedAssignment(submission.assignmentId);
-//     if (!assignment) {
-//       return res
-//         .status(404)
-//         .json({ message: "Assignment profile context not found." });
-//     }
-
-//     if (new Date() > new Date(assignment.dueDate)) {
-//       return res.status(403).json({
-//         message: "The evaluation due date has passed. Submission rejected.",
-//       });
-//     }
-
-//     if (
-//       submission.status === "submitted" &&
-//       !assignment.allowMultipleSubmissions
-//     ) {
-//       return res.status(400).json({
-//         message:
-//           "Assignment has already been completed and locked for this student.",
-//       });
-//     }
-
-//     if (
-//       assignment.modality === "Text-Only" &&
-//       (!responses || !Array.isArray(responses) || responses.length === 0)
-//     ) {
-//       return res.status(400).json({
-//         message:
-//           "Validation Error: Submission response body text cannot be empty.",
-//       });
-//     }
-
-//     if (assignment.modality === "Speech-Only" && !req.file) {
-//       return res.status(400).json({
-//         message:
-//           "Validation Error: This turn-based route requires an audio file buffer stream.",
-//       });
-//     }
-
-//     let result;
-
-//     // 💾 Save the student's data first so nothing is lost if AI/Redis fails
-//     submission.tabSwitchCount =
-//       parseInt(tabSwitchCount) || submission.tabSwitchCount;
-//     if (assignment.modality === "Text-Only") {
-//       submission.responses = responses;
-//     }
-//     await submission.save();
-
-//     try {
-//       if (assignment.modality === "Text-Only") {
-//         const prevStatus = submission.status;
-
-//         // atomic lock: a double-click can't enqueue twice
-//         const locked = await Submission.findOneAndUpdate(
-//           { _id: submission._id, status: { $ne: "queued" } },
-//           { $set: { status: "queued" } },
-//         );
-//         if (!locked) {
-//           return res
-//             .status(409)
-//             .json({
-//               message: "Already queued for evaluation.",
-//               status: "queued",
-//             });
-//         }
-
-//         try {
-//           await withTimeout(
-//             gradingQueue.add("evaluate-assignment", {
-//               submissionId: submission._id.toString(),
-//               assignment,
-//               responses,
-//               criteriaMap: toCriteriaMap(assignment),
-//               preferredModel,
-//               prevStatus,
-//             }),
-//             5000,
-//             "Queue add",
-//           );
-//         } catch (queueErr) {
-//           // roll back, then let the retry fallback below grade it inline
-//           await Submission.updateOne(
-//             { _id: submission._id },
-//             { $set: { status: prevStatus } },
-//           );
-//           throw queueErr;
-//         }
-
-//         submission.status = "queued"; // so the response isn't stale
-//         return res.status(202).json({
-//           message:
-//             "Assignment submitted successfully and queued for AI evaluation.",
-//           status: "queued",
-//           submission,
-//         });
-//       }
-
-//       // Speech-Only: synchronous so the student gets the next question instantly
-//       result = await processAiGrading({
-//         assignment,
-//         submission,
-//         responses,
-//         audioFile: req.file,
-//         preferredModel,
-//       });
-//     } catch (gradingError) {
-//       console.warn(
-//         "⚠️ Queue/AI hiccup, using retry fallback:",
-//         gradingError.message,
-//       );
-
-//       let success = false;
-//       let attempts = 0;
-//       let finalError;
-
-//       while (!success && attempts < 3) {
-//         attempts++;
-//         try {
-//           if (attempts > 1) {
-//             await new Promise((r) => setTimeout(r, attempts * 3000));
-//           }
-//           result = await processAiGrading({
-//             assignment,
-//             submission,
-//             responses,
-//             audioFile: req.file,
-//             preferredModel,
-//           });
-//           success = true;
-//         } catch (retryError) {
-//           finalError = retryError;
-//           console.warn(
-//             `⚠️ Fallback attempt ${attempts} failed:`,
-//             retryError.message,
-//           );
-//         }
-//       }
-
-//       if (!success) {
-//         return res.status(429).json({
-//           message:
-//             "⚠️ High Traffic Alert: Our AI servers are working at maximum capacity. Your answers are safely saved. Please wait about 30 seconds and click submit again.",
-//           error: finalError?.message,
-//         });
-//       }
-//     }
-
-//     // 💾 Post-processing (inline fallback path + speech turns)
-//     submission.tabSwitchCount =
-//       parseInt(tabSwitchCount) || submission.tabSwitchCount;
-
-//     if (assignment.modality === "Text-Only") {
-//       submission.responses = responses;
-//       submission.aiEvaluation = {
-//         scores: result.scores,
-//         totalScoreGivenByAI: result.totalScoreGivenByAI,
-//         feedback: result.feedback,
-//       };
-//       submission.status = "submitted";
-//       submission.submittedAt = new Date();
-//       submission.finalScoreOverride = null;
-//     } else if (assignment.modality === "Speech-Only") {
-//       submission.conversationHistory.push({
-//         role: "student",
-//         text: result.transcript,
-//       });
-
-//       if (result.nextQuestion === "CONVERSATION_COMPLETE") {
-//         submission.status = "submitted";
-//         submission.submittedAt = new Date();
-//         submission.finalScoreOverride = null;
-//         submission.aiEvaluation = {
-//           scores: result.finalScores || {},
-//           totalScoreGivenByAI: result.totalScoreGivenByAI || 0,
-//           feedback:
-//             result.finalFeedback ||
-//             "Interview simulation concluded successfully.",
-//         };
-//       } else {
-//         submission.conversationHistory.push({
-//           role: "interviewer",
-//           text: result.nextQuestion,
-//         });
-//         submission.status = "ongoing";
-//       }
-//     }
-
-//     await submission.save();
-
-//     res.status(200).json({
-//       message: "Submission updated and processed successfully.",
-//       status: submission.status,
-//       transcriptReceived:
-//         assignment.modality === "Speech-Only" ? result.transcript : undefined,
-//       nextQuestionToSpeak:
-//         assignment.modality === "Speech-Only" ? result.nextQuestion : undefined,
-//       submission,
-//     });
-//   } catch (error) {
-//     console.error("❌ Evaluation Controller Runtime Crash:", error);
-//     res.status(500).json({
-//       message: "AI Processing execution module dropped.",
-//       error: error.message,
-//     });
-//   }
-// };
-
-// // 2. FETCH GRADES FOR INSTRUCTOR PANELS
-// export const getAssignmentSubmissions = async (req, res) => {
-//   const { assignmentId } = req.params;
-//   const { status } = req.query;
-
-//   try {
-//     let queryFilter = { assignmentId };
-//     if (status) {
-//       queryFilter.status = status;
-//     }
-
-//     const submissions = await Submission.find(queryFilter)
-//       .populate("studentId", "name email")
-//       .sort({ submittedAt: -1 });
-
-//     res.status(200).json(submissions);
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
-
-// // 3. MANUAL INSTRUCTOR MARK OVERRIDES
-// export const overrideSubmissionScore = async (req, res) => {
-//   const { finalScoreOverride } = req.body;
-//   try {
-//     const submission = await Submission.findByIdAndUpdate(
-//       req.params.id,
-//       { $set: { finalScoreOverride } },
-//       { new: true },
-//     );
-//     res.status(200).json({
-//       message: "Teacher score override updated successfully.",
-//       submission,
-//     });
-//   } catch (error) {
-//     res.status(500).json({ error: error.message });
-//   }
-// };
-
-// // 4. FETCH FULL SUBMISSION DETAIL
-// export const getStudentSubmissionDetails = async (req, res) => {
-//   try {
-//     const submission = await Submission.findById(req.params.id)
-//       .populate({
-//         path: "assignmentId",
-//         select:
-//           "title modality totalMarks dueDate questionPool aiNotes instructions isResultPublished classId evaluationCriteria allowMultipleSubmissions attachments",
-//         populate: {
-//           path: "classId",
-//           select: "name",
-//         },
-//       })
-//       .populate("studentId", "name email");
-
-//     if (!submission) {
-//       return res
-//         .status(404)
-//         .json({ message: "Submission workspace not found." });
-//     }
-
-//     const assignment = await getCachedAssignment(submission.assignmentId);
-
-//     const isOwner =
-//       submission.studentId._id.toString() === req.user._id.toString();
-//     const isTeacher = req.user.role === "teacher";
-
-//     if (!isOwner && !isTeacher) {
-//       return res
-//         .status(403)
-//         .json({ message: "Access Denied: Workspace ownership mismatch." });
-//     }
-
-//     let sanitizedSubmission = submission.toObject();
-//     sanitizedSubmission.assignmentId = assignment;
-
-//     if (isTeacher) {
-//       return res.status(200).json(sanitizedSubmission);
-//     }
-
-//     if (
-//       sanitizedSubmission.finalScoreOverride !== null &&
-//       sanitizedSubmission.finalScoreOverride !== undefined
-//     ) {
-//       if (sanitizedSubmission.aiEvaluation) {
-//         sanitizedSubmission.aiEvaluation.totalScoreGivenByAI =
-//           sanitizedSubmission.finalScoreOverride;
-//       }
-//       delete sanitizedSubmission.finalScoreOverride;
-//     }
-
-//     if (assignment && assignment.isResultPublished === false) {
-//       if (sanitizedSubmission.aiEvaluation) {
-//         sanitizedSubmission.aiEvaluation.totalScoreGivenByAI = null;
-//         sanitizedSubmission.aiEvaluation.scores = null;
-//       }
-//       delete sanitizedSubmission.finalScoreOverride;
-//     }
-
-//     res.status(200).json(sanitizedSubmission);
-//   } catch (error) {
-//     res.status(500).json({
-//       message: "Error loading submission data context.",
-//       error: error.message,
-//     });
-//   }
-// };
-
-// // 🟢 TAMPER-PROOF REAL-TIME INFRACTION CONTROLLER
-// export const logSubmissionInfraction = async (req, res) => {
-//   try {
-//     const { id } = req.params;
-
-//     const updatedSubmission = await Submission.findByIdAndUpdate(
-//       id,
-//       { $inc: { tabSwitchCount: 1 } },
-//       { new: true, runValidators: true },
-//     );
-
-//     if (!updatedSubmission) {
-//       return res
-//         .status(404)
-//         .json({ message: "Submission profile document context not found." });
-//     }
-
-//     console.log(
-//       `🔒 [Proctor Alert] Submission ${id} tabSwitchCount securely incremented to: ${updatedSubmission.tabSwitchCount}`,
-//     );
-
-//     return res.status(200).json({
-//       message: "Infraction successfully logged.",
-//       tabSwitchCount: updatedSubmission.tabSwitchCount,
-//     });
-//   } catch (error) {
-//     console.error("Error logging real-time proctor infraction:", error);
-//     return res.status(500).json({
-//       message: "Internal server registry logging failure.",
-//       error: error.message,
-//     });
-//   }
-// };
-
 //submitController.js
 import Submission from "../models/Submission.js";
 import Classroom from "../models/Classroom.js";
+import Assignment from "../models/Assignment.js";
 import { getCachedAssignment } from "../utils/cacheUtils.js";
 import { processAiGrading } from "../services/gradingService.js"; // used for Speech-Only turns + emergency inline fallback
 import { enqueueGrading, removeGradingJob } from "../utils/enqueueGrading.js";
@@ -568,7 +187,8 @@ export const submitAssignment = async (req, res) => {
 
         // 2. Save submission payload and fraud metadata (Awaiting Teacher Manual Evaluation Trigger)
         submission.uploadedFiles = uploadedFilesMeta;
-        submission.status = "submitted";
+        submission.status = "queued"; // 🟢 CHANGE FROM "submitted" TO "queued"
+        submission.queuedAt = new Date(); // 🟢 Track queue entry time
         submission.submittedAt = new Date();
         submission.tabSwitchCount =
           parseInt(tabSwitchCount) || submission.tabSwitchCount;
@@ -1187,6 +807,193 @@ export const logSubmissionInfraction = async (req, res) => {
     console.error("Error logging real-time proctor infraction:", error);
     return res.status(500).json({
       message: "Internal server registry logging failure.",
+      error: error.message,
+    });
+  }
+};
+
+// 🆕 TEACHER: BULK EVALUATE ALL QUEUED UPLOAD SUBMISSIONS (WITH REDIS + INLINE FALLBACK)
+export const reevaluateQueuedUploads = async (req, res) => {
+  try {
+    const { assignmentId } = req.params;
+
+    const assignment = await getCachedAssignment(assignmentId);
+    if (!assignment) {
+      return res.status(404).json({ message: "Assignment not found." });
+    }
+
+    if (!(await teacherOwnsAssignment(assignment, req.user._id))) {
+      return res.status(403).json({ message: "Unauthorized action." });
+    }
+
+    if (assignment.modality !== "Upload") {
+      return res
+        .status(400)
+        .json({
+          message: "This route is exclusively for Upload modality assignments.",
+        });
+    }
+
+    const queuedSubmissions = await Submission.find({
+      assignmentId,
+      status: "queued",
+    });
+
+    if (queuedSubmissions.length === 0) {
+      return res
+        .status(200)
+        .json({
+          message: "No queued upload submissions found to evaluate.",
+          evaluatedCount: 0,
+        });
+    }
+
+    let evaluatedCount = 0;
+    let fallbackCount = 0;
+    let skippedCount = 0;
+
+    let targetAssignmentIds = [assignment._id];
+    if (assignment.assignmentCode) {
+      const matchingAssignments = await Assignment.find({
+        assignmentCode: assignment.assignmentCode,
+      }).select("_id");
+      targetAssignmentIds = matchingAssignments.map((a) => a._id);
+    }
+
+    const existingSubmissions = await Submission.find({
+      assignmentId: { $in: targetAssignmentIds },
+    });
+
+    const targetQuestion =
+      assignment.questionPool?.[0] || "General Assignment Submission";
+    const criteriaMapObj = Object.fromEntries(
+      assignment.evaluationCriteria || new Map(),
+    );
+    const thresholdPercentage =
+      assignment.uploadConfig?.similarityThreshold ?? 85;
+    const similarityThresholdRatio = thresholdPercentage / 100;
+
+    for (const submission of queuedSubmissions) {
+      try {
+        // 🟢 STEP 1: Attempt to enqueue via Redis/BullMQ first
+        try {
+          await enqueueGrading({
+            submissionId: submission._id,
+            assignment,
+            responses: submission.responses || [],
+          });
+          evaluatedCount++;
+          continue; // Successfully handed off to Redis queue
+        } catch (redisErr) {
+          // Redis down or unreachable: trigger inline fallback execution immediately
+          console.warn(
+            `⚠️ Redis queue unreachable for bulk upload evaluation (${submission._id}), executing inline fallback:`,
+            redisErr.message,
+          );
+          fallbackCount++;
+        }
+
+        // 🟢 STEP 2: INLINE FALLBACK EXECUTION (If Redis fails)
+        const filesForEvaluation = [];
+        for (const file of submission.uploadedFiles || []) {
+          try {
+            if (file.fileUrl) {
+              const fetchRes = await fetch(file.fileUrl);
+              const arrayBuffer = await fetchRes.arrayBuffer();
+              filesForEvaluation.push({
+                originalname: file.fileName || "uploaded_page.jpg",
+                mimetype:
+                  file.fileType === "pdf" ? "application/pdf" : "image/jpeg",
+                buffer: Buffer.from(arrayBuffer),
+              });
+            }
+          } catch (fetchErr) {
+            console.warn(
+              `⚠️ Could not fetch file buffer for inline fallback:`,
+              fetchErr.message,
+            );
+          }
+        }
+
+        let aiResult = null;
+        try {
+          aiResult = await evaluateUploadWithRouter({
+            question: targetQuestion,
+            files: filesForEvaluation,
+            criteriaMap: criteriaMapObj,
+            aiNotes: assignment.aiNotes,
+          });
+        } catch (evalErr) {
+          console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
+          aiResult = {
+            isScreenCapture: false,
+            isSyntheticHandwriting: false,
+            scores: {},
+            totalScoreGivenByAI: 0,
+            feedback: `Automated evaluation error: ${evalErr.message}`,
+          };
+        }
+
+        let textPlagiarismDetected = false;
+        let textMatchedStudentId = null;
+        let plagiarismClusterId = submission.plagiarismClusterId || null;
+        const studentFeedbackText = aiResult?.feedback || "";
+
+        if (studentFeedbackText.trim().length > 15) {
+          for (const sub of existingSubmissions) {
+            if (sub._id.toString() === submission._id.toString()) continue;
+            const peerFeedbackText = sub.aiEvaluation?.feedback || "";
+            const similarityScore = calculateTextSimilarity(
+              studentFeedbackText,
+              peerFeedbackText,
+            );
+
+            if (similarityScore >= similarityThresholdRatio) {
+              textPlagiarismDetected = true;
+              textMatchedStudentId = sub.studentId;
+              plagiarismClusterId = sub.plagiarismClusterId || sub._id;
+              break;
+            }
+          }
+        }
+
+        if (textPlagiarismDetected && !plagiarismClusterId) {
+          plagiarismClusterId = submission._id;
+        }
+
+        submission.isTextPlagiarism = textPlagiarismDetected;
+        submission.plagiarismClusterId = plagiarismClusterId;
+        if (textPlagiarismDetected) {
+          submission.plagiarismDetails =
+            `${submission.plagiarismDetails || ""} | Text similarity match with cross-division student ID: ${textMatchedStudentId}`.trim();
+        }
+
+        submission.aiEvaluation = {
+          scores: aiResult.scores || {},
+          totalScoreGivenByAI: aiResult.totalScoreGivenByAI || 0,
+          feedback: `${aiResult.isScreenCapture ? "🚨 [Flagged: Screen Capture Photo] " : ""}${aiResult.isSyntheticHandwriting ? "🚨 [Flagged: Text-to-Handwriting Tool / Printout] " : ""}${aiResult.feedback || ""}`,
+        };
+
+        submission.status = "submitted";
+        await submission.save();
+      } catch (err) {
+        console.warn(
+          `⚠️ Could not process evaluation for ${submission._id}:`,
+          err.message,
+        );
+        skippedCount++;
+      }
+    }
+
+    res.status(200).json({
+      message: `Successfully processed bulk evaluation (Queued via Redis: ${evaluatedCount}, Inline Fallback: ${fallbackCount}).`,
+      evaluatedCount: evaluatedCount + fallbackCount,
+      skippedCount,
+    });
+  } catch (error) {
+    console.error("❌ Bulk upload evaluation failure:", error);
+    res.status(500).json({
+      message: "Could not process bulk upload evaluation.",
       error: error.message,
     });
   }

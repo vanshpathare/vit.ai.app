@@ -1,8 +1,15 @@
-import React from "react";
-import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import {
+  Routes,
+  Route,
+  Navigate,
+  useNavigate,
+  useParams,
+} from "react-router-dom";
 import { useAuth } from "./context/AuthContext";
 import Auth from "./pages/Auth";
 import { getInitials } from "./utils/getInitials";
+import { getAssignmentByIdAPI } from "./services/api";
 
 import TeacherDashboard from "./pages/teacher/TeacherDashboard";
 import StudentDashboard from "./pages/student/StudentDashboard";
@@ -14,14 +21,12 @@ import UploadWorkspace from "./pages/student/UploadWorkspace";
 
 import ClassDetail from "./pages/teacher/ClassDetail";
 import SubmissionTracker from "./pages/teacher/SubmissionTracker";
+import UploadSubmissionTracker from "./pages/teacher/UploadSubmissionTracker";
 
 import Account from "./pages/Account";
 import logoImg from "./assets/assignbuddy_logo_without_text.png";
 
 // 🔧 RE-THEMED: indigo → warm orange/amber gradient, matching the reference design.
-// This is the color system every other page should follow when you extend the
-// re-theme further: primary accent = orange-600, gradient = orange-500→amber-500,
-// warm page background = amber-50/orange-50, cards stay white for contrast.
 function Header({ userName, userRole, onLogout }) {
   const navigate = useNavigate();
 
@@ -62,13 +67,51 @@ function Header({ userName, userRole, onLogout }) {
         </div>
         <button
           onClick={onLogout}
-          className="text-xs font-bold text-orange-700 bg-white hover:bg-orange-50 px-3 py-1.5 rounded-full transition-colors shadow-sm"
+          className="text-xs font-bold text-orange-700 bg-white hover:bg-orange-50 px-3 py-1.5 rounded-full transition-colors shadow-sm cursor-pointer"
         >
           Sign Out
         </button>
       </div>
     </nav>
   );
+}
+
+// 🟢 DISPATCHER COMPONENT TO ROUTE TEACHERS TO THE CORRECT TRACKER BY MODALITY
+function TeacherAssignmentRouter() {
+  const { assignmentId } = useParams();
+  const [modality, setModality] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const checkModality = async () => {
+      try {
+        const res = await getAssignmentByIdAPI(assignmentId);
+        setModality(res.data?.modality || "Text-Only");
+      } catch (err) {
+        console.error("Failed to resolve assignment modality:", err);
+        setModality("Text-Only");
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (assignmentId) checkModality();
+  }, [assignmentId]);
+
+  if (loading) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center text-sm font-medium text-slate-400 gap-2">
+        <div className="w-6 h-6 border-2 border-orange-600 border-t-transparent rounded-full animate-spin"></div>
+        <span>Loading assignment workspace...</span>
+      </div>
+    );
+  }
+
+  // Render Upload Tracker for Upload assignments, standard SubmissionTracker otherwise
+  if (modality === "Upload") {
+    return <UploadSubmissionTracker />;
+  }
+
+  return <SubmissionTracker />;
 }
 
 function App() {
@@ -122,9 +165,11 @@ function App() {
           />
 
           <Route path="/teacher/class/:classId" element={<ClassDetail />} />
+
+          {/* 🟢 DYNAMIC ASSIGNMENT TRACKER ROUTER WRAPPER */}
           <Route
             path="/teacher/assignment/:assignmentId"
-            element={<SubmissionTracker />}
+            element={<TeacherAssignmentRouter />}
           />
 
           <Route path="/account" element={<Account />} />
