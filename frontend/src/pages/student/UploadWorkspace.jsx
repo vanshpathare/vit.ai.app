@@ -4,6 +4,7 @@ import {
   getSubmissionDetailsAPI,
   submitAssignmentAPI,
   logInfractionAPI,
+  getClassroomDetailsAPI,
 } from "../../services/api";
 import {
   Video,
@@ -15,6 +16,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import DocxViewerModal from "../../components/DocxViewerModal";
+import LiveCameraCapture from "../../components/LiveCameraCapture";
 
 function UploadWorkspace() {
   const { id } = useParams(); // submissionId
@@ -30,6 +32,7 @@ function UploadWorkspace() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
   const [previewDoc, setPreviewDoc] = useState(null);
+  const [classroomName, setClassroomName] = useState("Classroom Team");
 
   const isFinished = ["submitted", "queued"].includes(submission?.status);
 
@@ -42,6 +45,15 @@ function UploadWorkspace() {
         setSubmission(res.data);
         if (res.data?.tabSwitchCount)
           setTabSwitchCount(res.data.tabSwitchCount);
+
+        const classIdRef =
+          res.data.assignmentId?.classId?._id || res.data.assignmentId?.classId;
+        if (classIdRef) {
+          const classRes = await getClassroomDetailsAPI(classIdRef);
+          if (classRes.data?.name) {
+            setClassroomName(classRes.data.name);
+          }
+        }
       } catch (err) {
         console.error("Failed to load upload workspace:", err);
         setError(
@@ -171,8 +183,9 @@ function UploadWorkspace() {
   const assignment = submission.assignmentId || {};
   const isOverdue =
     assignment.dueDate && new Date() > new Date(assignment.dueDate);
-  const classNameStr =
-    submission.classId?.name || assignment.classId?.name || "BA AI 2627";
+  const classNameStr = classroomName;
+  const allowedFormat =
+    assignment.uploadConfig?.allowedUploadType || "handwritten";
 
   return (
     <div className="w-full min-h-[calc(100vh-4.5rem)] flex flex-col md:flex-row bg-slate-50/50 text-left select-none">
@@ -388,7 +401,7 @@ function UploadWorkspace() {
               )}
             </div>
           ) : (
-            // Upload Dropzone & Selected Files
+            // Upload Dropzone & Selected Files / Live Camera
             <div className="space-y-4">
               {submitError && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-600 font-medium">
@@ -396,54 +409,63 @@ function UploadWorkspace() {
                 </div>
               )}
 
-              {/* Selected Files List */}
-              {selectedFiles.length > 0 && (
-                <div className="space-y-2">
-                  {selectedFiles.map((file, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl shadow-sm"
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
-                        <span className="text-xs font-bold text-slate-800 truncate">
-                          {file.name}
-                        </span>
-                        <span className="text-[10px] text-slate-400">
-                          ({(file.size / 1024 / 1024).toFixed(2)} MB)
-                        </span>
-                      </div>
-                      <button
-                        onClick={() => removeFile(idx)}
-                        className="text-slate-400 hover:text-red-600 p-1"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Upload Trigger Button & Input */}
-              <label className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-white hover:bg-indigo-5{-/30 rounded-2xl cursor-pointer transition-all shadow-sm group">
-                <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <Upload className="w-5 h-5" />
-                </div>
-                <h4 className="text-sm font-bold text-slate-800">
-                  Attach assignment files
-                </h4>
-                <p className="text-xs text-slate-400 mt-1">
-                  Upload images (JPG/PNG) or PDFs of your handwritten or typed
-                  work
-                </p>
-                <input
-                  type="file"
-                  multiple
-                  accept="image/*,application/pdf"
-                  onChange={handleFileSelect}
-                  className="hidden"
+              {/* 🟢 CONDITIONAL RENDERING: Live Camera Component vs Standard File Picker */}
+              {allowedFormat === "handwritten" || allowedFormat === "image" ? (
+                <LiveCameraCapture
+                  onCapture={(files) => setSelectedFiles(files)}
+                  maxPages={assignment.uploadConfig?.maxPages || 5}
                 />
-              </label>
+              ) : (
+                <>
+                  {/* Selected Files List */}
+                  {selectedFiles.length > 0 && (
+                    <div className="space-y-2">
+                      {selectedFiles.map((file, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-xl shadow-sm"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
+                            <span className="text-xs font-bold text-slate-800 truncate">
+                              {file.name}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              ({(file.size / 1024 / 1024).toFixed(2)} MB)
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => removeFile(idx)}
+                            className="text-slate-400 hover:text-red-600 p-1"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Standard PDF / Document Upload Trigger */}
+                  <label className="flex flex-col items-center justify-center p-8 border-2 border-dashed border-slate-300 hover:border-indigo-500 bg-white hover:bg-indigo-50/30 rounded-2xl cursor-pointer transition-all shadow-sm group">
+                    <div className="w-12 h-12 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                      <Upload className="w-5 h-5" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      Attach document files
+                    </h4>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Upload scanned PDF documents of your work
+                    </p>
+                    <input
+                      type="file"
+                      multiple
+                      accept="application/pdf"
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                  </label>
+                </>
+              )}
 
               <div className="flex justify-end pt-2">
                 <button

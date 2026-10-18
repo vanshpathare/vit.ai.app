@@ -472,6 +472,25 @@ export const submitAssignment = async (req, res) => {
         });
       }
 
+      const allowedType =
+        assignment.uploadConfig?.allowedUploadType || "handwritten";
+      // "handwritten" or "image" means pictures/photos only; "document" allows PDFs.
+      if (allowedType === "handwritten") {
+        for (let i = 0; i < req.files.length; i++) {
+          const file = req.files[i];
+          const isPdf =
+            file.mimetype === "application/pdf" ||
+            file.originalname.endsWith(".pdf");
+
+          if (isPdf) {
+            return res.status(400).json({
+              message:
+                "Validation Error: This assignment only accepts camera images. PDFs are not allowed.",
+            });
+          }
+        }
+      }
+
       try {
         // 1. Cross-division lookup: Find all assignments sharing this same assignmentCode
         let targetAssignmentIds = [assignment._id];
@@ -1068,6 +1087,7 @@ export const getStudentSubmissionDetails = async (req, res) => {
           select: "name",
         },
       })
+      // .populate("classId", "name subjectIcon")
       .populate("studentId", "name email");
 
     if (!submission) {
@@ -1090,6 +1110,10 @@ export const getStudentSubmissionDetails = async (req, res) => {
 
     let sanitizedSubmission = submission.toObject();
     sanitizedSubmission.assignmentId = assignment;
+
+    // if (!sanitizedSubmission.classId && assignment?.classId) {
+    //   sanitizedSubmission.classId = assignment.classId;
+    // }
 
     if (isTeacher) {
       return res.status(200).json(sanitizedSubmission);
