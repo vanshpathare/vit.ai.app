@@ -314,6 +314,7 @@ const uploadWorker = new Worker(
           files: filesForEvaluation,
           criteriaMap: criteriaMapObj,
           aiNotes: assignment.aiNotes,
+          studentRosterName: submission.studentId?.name || "",
         });
 
         // 🟢 4. SAVE EXACT TRANSCRIBED TEXT TO DATABASE FIRST

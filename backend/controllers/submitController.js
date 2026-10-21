@@ -492,6 +492,7 @@ export const reevaluateSubmission = async (req, res) => {
           files: filesForEvaluation,
           criteriaMap: criteriaMapObj,
           aiNotes: assignment.aiNotes,
+          studentRosterName: submission.studentId?.name || "",
         });
       } catch (evalErr) {
         console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
@@ -1016,6 +1017,7 @@ export const reevaluateSingleUpload = async (req, res) => {
         files: filesForEvaluation,
         criteriaMap: criteriaMapObj,
         aiNotes: assignment.aiNotes,
+        studentRosterName: submission.studentId?.name || "",
       });
     } catch (evalErr) {
       console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);

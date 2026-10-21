@@ -56,6 +56,38 @@ function normalizeUploadEvaluation(raw, criteriaMap) {
     );
   }
 
+  let nameMismatchWarning = "";
+  if (studentRosterName && raw.candidateName) {
+    // Helper to clean and split a name into unique word tokens
+    const getTokens = (str) =>
+      str
+        .toLowerCase()
+        .replace(/[^a-z\s]/g, "") // Remove punctuation
+        .split(/\s+/)
+        .filter((word) => word.length > 2); // Ignore tiny initials like "A.", "K."
+
+    const rosterTokens = getTokens(studentRosterName);
+    const extractedTokens = getTokens(raw.candidateName);
+
+    // Count how many roster tokens appear in the certificate name
+    const matchedTokens = rosterTokens.filter((token) =>
+      extractedTokens.includes(token),
+    );
+
+    // A match is valid if at least the First Name and Last Name (or at least 2 major tokens) match
+    const matchThreshold = Math.min(2, rosterTokens.length);
+    const isLikelyMatch = matchedTokens.length >= matchThreshold;
+
+    if (!isLikelyMatch && raw.candidateName.trim() !== "") {
+      nameMismatchWarning = `⚠️ [Certificate Name Mismatch: Document says "${raw.candidateName}", but roster name is "${studentRosterName}"] `;
+
+      for (const key of Object.keys(criteriaMap)) {
+        raw.scores[key] = 0;
+      }
+      raw.totalScoreGivenByAI = 0;
+    }
+  }
+
   if (!raw || typeof raw !== "object" || !raw.scores)
     throw bad("Missing scores");
   if (typeof raw.feedback !== "string" || !raw.feedback.trim())
@@ -158,6 +190,7 @@ export async function evaluateUploadWithRouter({
     Before grading content, perform two independent forensic checks on the image/document:
     1. isScreenCapture: Set to true ONLY if the image is a physical photograph of a laptop, phone, or monitor screen (exhibiting Moiré interference waves, RGB subpixel display grids, or monitor borders). Otherwise false.
     2. isSyntheticHandwriting: Set to true ONLY if the text appears to be created via a digital text-to-handwriting font generator tool and printed out on paper (exhibiting 100% identical repeating letter glyphs, flat laser printer ink density, or rigid machine-like baseline tracking). Otherwise false.
+    3. candidateName: Extract the exact full name of the student/candidate printed anywhere on the certificate, award, or submission document. If no name is visible or legible, return an empty string "".
 
     If either is true, provide a brief description in "fraudReason".
 
@@ -174,6 +207,7 @@ export async function evaluateUploadWithRouter({
         "isScreenCapture": boolean,
         "isSyntheticHandwriting": boolean,
         "fraudReason": "string (optional)",
+        "candidateName": "string",
         "transcribedText": "string",
         "scores": { [criterionName]: number },
         "totalScoreGivenByAI": number,
@@ -266,6 +300,7 @@ ${aiNotes ? `Teacher Notes & Focus: "${aiNotes}"` : ""}
                 isScreenCapture: { type: Type.BOOLEAN },
                 isSyntheticHandwriting: { type: Type.BOOLEAN },
                 fraudReason: { type: Type.STRING },
+                candidateName: { type: Type.STRING },
                 transcribedText: { type: Type.STRING },
                 scores: {
                   type: Type.OBJECT,
@@ -278,6 +313,7 @@ ${aiNotes ? `Teacher Notes & Focus: "${aiNotes}"` : ""}
               required: [
                 "isScreenCapture",
                 "isSyntheticHandwriting",
+                "candidateName",
                 "transcribedText",
                 "scores",
                 "totalScoreGivenByAI",
