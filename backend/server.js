@@ -19,6 +19,7 @@ import resourceRoutes from "./routes/resourceRoutes.js";
 import cronRoutes from "./routes/cronRoutes.js";
 // server.js (or app.js)
 import "./workers/gradingWorker.js"; // 👈 Add this line so the worker boots up with your server
+import "./workers/uploadGradingWorker.js"; // 👈 Add this inside server.js
 
 // const originalConnect = net.Socket.prototype.connect;
 // net.Socket.prototype.connect = function (...args) {

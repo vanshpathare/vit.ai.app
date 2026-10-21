@@ -52,13 +52,14 @@ function SubmissionTracker() {
   const [roster, setRoster] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [filter, setFilter] = useState("all"); // all | submitted | pending
+  const [filter, setFilter] = useState("all"); // all | submitted | queued | pending | same_content
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [selectedSubmissionId, setSelectedSubmissionId] = useState(null);
   const [requeueingId, setRequeueingId] = useState(null);
   const [isBulkRequeueing, setIsBulkRequeueing] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [isEvaluating, setIsEvaluating] = useState(false);
 
   const loadData = async () => {
     try {
@@ -103,7 +104,7 @@ function SubmissionTracker() {
   // while anything waits for the AI, refresh every 15 seconds
   useEffect(() => {
     if (!hasQueued) return;
-    const timer = setInterval(refreshSubmissions, 15000);
+    const timer = setInterval(refreshSubmissions, 3000);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasQueued, assignmentId]);
@@ -128,14 +129,15 @@ function SubmissionTracker() {
 
   const handleEvaluateStuck = async () => {
     setIsBulkRequeueing(true);
+    setIsEvaluating(true);
     try {
-      const res = await reevaluateStuckSubmissionsAPI(assignmentId);
-      alert(res.data?.message || "Done.");
+      await reevaluateStuckSubmissionsAPI(assignmentId);
       await refreshSubmissions();
     } catch (err) {
       alert(
         err.response?.data?.message || "Could not re-send stuck submissions.",
       );
+      setIsEvaluating(false);
     } finally {
       setIsBulkRequeueing(false);
     }
@@ -153,9 +155,6 @@ function SubmissionTracker() {
     }
   };
 
-  // 🔧 FIXED: was sorting alphabetically by name — this was silently overriding the
-  // correct roll-number order the backend already returns. Now sorts by roll number
-  // (rule a: year, rule b: division letter A<B<C, rule c: serial number ascending).
   const sortedRoster = [...roster].sort((a, b) =>
     compareRollNumbers(a.rollNumber, b.rollNumber),
   );
@@ -167,8 +166,33 @@ function SubmissionTracker() {
     return { student, submission };
   });
 
-  // Resolves the score to display inline on a row — the teacher's manual override
-  // when one exists, otherwise the AI-given score.
+  const localStudentIds = new Set(roster.map((r) => r._id.toString()));
+  const externalClusterSubmissions = submissions.filter((sub) => {
+    if (!sub.isTextPlagiarism || !sub.plagiarismClusterId) return false;
+    const subStudentId =
+      sub.studentId?._id?.toString() || sub.studentId?.toString();
+    return !localStudentIds.has(subStudentId);
+  });
+
+  const externalRows = externalClusterSubmissions.map((sub) => {
+    // 🟢 Safely grab the team/class name from the populated assignment context
+    const teamName = sub.assignmentId?.classId?.name || "Other Division";
+
+    return {
+      student: {
+        _id: sub.studentId?._id || sub.studentId,
+        name: sub.studentId?.name || "External Student",
+        email: sub.studentId?.email || "Other Division",
+        rollNumber: sub.studentId?.rollNumber || "EXT",
+        teamName: teamName, // 🟢 Passed cleanly to the frontend row
+        classId: "external-class",
+      },
+      submission: sub,
+    };
+  });
+
+  const allTrackerRows = [...mergedRows, ...externalRows];
+
   const getDisplayScore = (submission) => {
     if (!submission) return null;
     if (
@@ -186,15 +210,36 @@ function SubmissionTracker() {
     return null;
   };
 
-  const filteredRows = mergedRows.filter(({ submission }) => {
+  const sameContentCount = submissions.filter((s) => s.isTextPlagiarism).length;
+
+  const rowsToFilter = filter === "same_content" ? allTrackerRows : mergedRows;
+
+  const filteredRows = rowsToFilter.filter(({ submission }) => {
     if (filter === "submitted") return submission?.status === "submitted";
     if (filter === "queued") return submission?.status === "queued";
     if (filter === "pending")
       return (
         !submission || !["submitted", "queued"].includes(submission.status)
       );
+    if (filter === "same_content") return submission?.isTextPlagiarism;
     return true;
   });
+
+  // 🟢 CLUSTER & SORT LOGIC FOR "SAME CONTENT" TAB
+  const clusteredRows =
+    filter === "same_content"
+      ? [...filteredRows].sort((a, b) => {
+          const clusterA =
+            a.submission?.plagiarismClusterId?._id?.toString() ||
+            a.submission?.plagiarismClusterId?.toString() ||
+            "";
+          const clusterB =
+            b.submission?.plagiarismClusterId?._id?.toString() ||
+            b.submission?.plagiarismClusterId?.toString() ||
+            "";
+          return clusterA.localeCompare(clusterB);
+        })
+      : filteredRows;
 
   const submittedCount = mergedRows.filter(
     ({ submission }) => submission?.status === "submitted",
@@ -202,6 +247,12 @@ function SubmissionTracker() {
   const queuedCount = mergedRows.filter(
     ({ submission }) => submission?.status === "queued",
   ).length;
+
+  useEffect(() => {
+    if (queuedCount === 0) {
+      setIsEvaluating(false);
+    }
+  }, [queuedCount]);
 
   if (isLoading) {
     return (
@@ -253,10 +304,22 @@ function SubmissionTracker() {
                 hour: "2-digit",
                 minute: "2-digit",
               })}{" "}
-              • {assignment.totalMarks} marks •{" "}
+              - {assignment.totalMarks} marks •{" "}
               {assignment.allowMultipleSubmissions
                 ? "Multiple attempts allowed"
                 : "Single attempt only"}
+              {assignment.assignmentCode && (
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(assignment.assignmentCode);
+                    alert("Assignment code copied to clipboard!");
+                  }}
+                  title="Click to copy code"
+                  className="font-mono text-amber-700 font-extrabold bg-amber-50 hover:bg-amber-100 px-2 py-0.5 rounded border border-amber-200 ml-2 transition-colors cursor-pointer inline-flex items-center gap-1 text-[10px]"
+                >
+                  Code: {assignment.assignmentCode}
+                </button>
+              )}
             </p>
           </div>
         </div>
@@ -285,16 +348,14 @@ function SubmissionTracker() {
       </div>
 
       {/* INSTRUCTIONS SECTION (If Present) */}
-      {/* 🟢 RESPONSIVE CONTAINER: Grid handles side-by-side on lg and tight stacking on small screens */}
       {((assignment.instructions && assignment.instructions.trim() !== "") ||
         (assignment.attachments && assignment.attachments.length > 0)) && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 sm:gap-3 lg:gap-4 items-stretch">
-          {/* 1. INSTRUCTIONS BLOCK */}
           {assignment.instructions && assignment.instructions.trim() !== "" && (
             <div
               className={`bg-amber-50/60 border border-amber-200 rounded-xl p-4 sm:p-5 flex flex-col justify-between space-y-2 shadow-sm ${
                 !assignment.attachments || assignment.attachments.length === 0
-                  ? "lg:col-span-2" // 🟢 Spans full width on lg if no attachments exist
+                  ? "lg:col-span-2"
                   : ""
               }`}
             >
@@ -309,13 +370,12 @@ function SubmissionTracker() {
             </div>
           )}
 
-          {/* 2. ATTACHED REFERENCE FILES & LINKS BLOCK */}
           {assignment.attachments && assignment.attachments.length > 0 && (
             <div
               className={`bg-white border border-slate-200 rounded-xl p-4 sm:p-5 flex flex-col space-y-1 shadow-sm ${
                 !assignment.instructions ||
                 assignment.instructions.trim() === ""
-                  ? "lg:col-span-2" // 🟢 Spans full width on lg if no instructions exist
+                  ? "lg:col-span-2"
                   : ""
               }`}
             >
@@ -365,7 +425,7 @@ function SubmissionTracker() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200 w-full sm:w-fit">
+      <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-lg border border-slate-200 w-full sm:w-fit overflow-x-auto">
         {[
           { key: "all", label: `All (${mergedRows.length})` },
           { key: "submitted", label: `Submitted (${submittedCount})` },
@@ -374,11 +434,20 @@ function SubmissionTracker() {
             key: "pending",
             label: `Not Submitted (${mergedRows.length - submittedCount - queuedCount})`,
           },
+          // 🟢 Conditional Same Content Filter Tab
+          ...(assignment.enableTextPlagiarism
+            ? [
+                {
+                  key: "same_content",
+                  label: `👥 Same Content (${sameContentCount})`,
+                },
+              ]
+            : []),
         ].map((tab) => (
           <button
             key={tab.key}
             onClick={() => setFilter(tab.key)}
-            className={`flex-1 sm:flex-none text-center px-4 py-2 text-xs sm:text-sm font-bold rounded-md transition-all ${
+            className={`flex-1 sm:flex-none text-center px-4 py-2 text-xs sm:text-sm font-bold rounded-md transition-all whitespace-nowrap ${
               filter === tab.key
                 ? "bg-white text-amber-600 shadow-sm"
                 : "text-slate-500 hover:text-amber-500"
@@ -390,168 +459,251 @@ function SubmissionTracker() {
       </div>
 
       {queuedCount > 0 && (
-        <div className="flex items-center justify-between gap-3 flex-wrap bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3">
-          <p className="text-xs sm:text-sm font-semibold text-indigo-800">
-            ⏳ {queuedCount} submission{queuedCount > 1 ? "s" : ""} waiting for
-            AI evaluation. This page refreshes automatically.
-          </p>
-          <button
-            onClick={handleEvaluateStuck}
-            disabled={isBulkRequeueing}
-            className="px-4 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm"
-          >
-            {isBulkRequeueing ? "Sending..." : "Evaluate all stuck"}
-          </button>
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4 space-y-3 shadow-sm">
+          {!isEvaluating ? (
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-xs sm:text-sm font-semibold text-indigo-900">
+                ⏳ {queuedCount} submission(s) waiting for AI evaluation.
+              </p>
+              <button
+                onClick={handleEvaluateStuck}
+                disabled={isBulkRequeueing}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
+              >
+                {isBulkRequeueing ? "Starting..." : "Evaluate all queued"}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-xs sm:text-sm font-bold text-indigo-900">
+                    AI Grading Engine is processing submissions in the
+                    background...
+                  </span>
+                </div>
+                <span className="text-xs font-extrabold text-indigo-700 bg-indigo-100 px-2.5 py-1 rounded-full">
+                  {submittedCount} Evaluated • {queuedCount} Remaining
+                </span>
+              </div>
+
+              {/* Progress Bar Track */}
+              <div className="w-full bg-indigo-200/60 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-indigo-600 to-amber-500 h-full transition-all duration-500 rounded-full"
+                  style={{
+                    width: `${Math.round((submittedCount / (mergedRows.filter((r) => r.submission).length || 1)) * 100)}%`,
+                  }}
+                ></div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* Student Rows */}
       <div className="space-y-2.5">
-        {filteredRows.length === 0 ? (
+        {clusteredRows.length === 0 ? (
           <div className="bg-slate-50 border border-dashed border-slate-200 rounded-xl p-12 text-center text-sm text-slate-400">
             No students match this filter.
           </div>
         ) : (
-          filteredRows.map(({ student, submission }) => {
+          clusteredRows.map(({ student, submission }, index) => {
             const hasFlags = submission?.tabSwitchCount > 0;
             const isSubmitted = submission?.status === "submitted";
             const isQueued = submission?.status === "queued";
-            return (
-              <div
-                key={student._id}
-                className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4 sm:px-5 transition-colors ${
-                  hasFlags
-                    ? "bg-red-50/70 border-red-200"
-                    : "bg-white border-slate-200"
-                }`}
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-indigo-100 text-amber-600 font-bold text-xs flex items-center justify-center shrink-0 uppercase">
-                    {getInitials(student.name, "ST")}
-                  </div>
-                  <div className="min-w-0">
-                    {/* 🟢 NEW: Roll number shown before the name */}
-                    <p className="text-sm font-bold text-slate-800 truncate">
-                      <span className="font-mono text-amber-600 mr-1.5">
-                        {student.rollNumber || "—"}
-                      </span>
-                      {student.name}
-                    </p>
-                    <p className="text-xs text-slate-400 truncate">
-                      {student.email}
-                    </p>
+            const isSameContent = submission?.isTextPlagiarism;
 
-                    {isQueued && submission.gradingError?.message && (
-                      <details className="mt-1">
-                        <summary className="text-[11px] font-bold text-red-600 cursor-pointer">
-                          ⚠️ Grading error •{" "}
-                          {submission.gradingError.final
-                            ? "gave up"
-                            : "retrying"}
-                        </summary>
-                        <p className="mt-1 text-[11px] text-red-700 bg-red-50 border border-red-100 rounded p-2 whitespace-pre-wrap break-words max-w-xl">
-                          {explainGradingError(submission.gradingError.message)}
-                          {"\n\n"}
-                          {submission.gradingError.message}
-                        </p>
-                      </details>
+            // 🟢 Check if student is from another division/team
+            const isExternalStudent =
+              assignment.classId &&
+              student.classId &&
+              student.classId.toString() !==
+                (assignment.classId?._id || assignment.classId).toString();
+
+            // 🟢 Determine if a separator line is needed between different clusters
+            let showSeparator = false;
+            if (filter === "same_content" && index > 0) {
+              const prevCluster =
+                clusteredRows[
+                  index - 1
+                ].submission?.plagiarismClusterId?.toString();
+              const currCluster = submission?.plagiarismClusterId?.toString();
+              if (prevCluster && currCluster && prevCluster !== currCluster) {
+                showSeparator = true;
+              }
+            }
+
+            return (
+              <React.Fragment key={student._id || index}>
+                {/* 🟢 Cluster Separator Divider Between Different Copy Groups */}
+                {showSeparator && (
+                  <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-amber-300 border-dashed"></div>
+                    </div>
+                    <div className="relative flex justify-center">
+                      <span className="bg-amber-50 px-3 text-[10px] font-extrabold text-amber-700 uppercase tracking-widest rounded-full border border-amber-200">
+                        ✂️ Cluster Separator — Different Copy Group
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4 sm:px-5 transition-colors ${
+                    hasFlags || isSameContent
+                      ? "bg-red-50/70 border-red-200"
+                      : "bg-white border-slate-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-full bg-indigo-100 text-amber-600 font-bold text-xs flex items-center justify-center shrink-0 uppercase">
+                      {getInitials(student.name, "ST")}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">
+                        <span className="font-mono text-amber-600 mr-1.5">
+                          {student.rollNumber || "—"}
+                        </span>
+                        {student.name}
+                      </p>
+                      <p className="text-xs text-slate-400 truncate">
+                        {student.email}
+                      </p>
+
+                      {/* Plagiarism & Warning Badges */}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                        {isSameContent && (
+                          <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
+                            👥 Same Content Group
+                          </span>
+                        )}
+                        {isExternalStudent && (
+                          <span className="text-[10px] font-black bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200">
+                            🌐 Cross-Division Match — Team: {student.teamName}
+                          </span>
+                        )}
+                      </div>
+
+                      {isQueued && submission.gradingError?.message && (
+                        <details className="mt-1">
+                          <summary className="text-[11px] font-bold text-red-600 cursor-pointer">
+                            ⚠️ Grading error •{" "}
+                            {submission.gradingError.final
+                              ? "gave up"
+                              : "retrying"}
+                          </summary>
+                          <p className="mt-1 text-[11px] text-red-700 bg-red-50 border border-red-100 rounded p-2 whitespace-pre-wrap break-words max-w-xl">
+                            {explainGradingError(
+                              submission.gradingError.message,
+                            )}
+                            {"\n\n"}
+                            {submission.gradingError.message}
+                          </p>
+                        </details>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap sm:justify-end">
+                    {isSubmitted &&
+                      (() => {
+                        const score = getDisplayScore(submission);
+                        if (!score) return null;
+                        return (
+                          <span
+                            className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${
+                              score.isOverride
+                                ? "bg-amber-100 text-amber-700"
+                                : "bg-indigo-100 text-indigo-700"
+                            }`}
+                          >
+                            {score.isOverride ? "✍️ Override: " : "🤖 AI: "}
+                            {score.value}/{assignment.totalMarks}
+                          </span>
+                        );
+                      })()}
+
+                    {hasFlags && (
+                      <span className="text-[10px] font-black bg-red-100 text-red-700 px-2.5 py-1 rounded uppercase tracking-wide">
+                        ⚠️ {submission.tabSwitchCount} tab switches
+                      </span>
+                    )}
+
+                    {submission?.status === "ongoing" && (
+                      <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-2.5 py-1 rounded uppercase tracking-wide">
+                        In Progress
+                      </span>
+                    )}
+
+                    {isQueued &&
+                      (() => {
+                        const waitMin = submission.queuedAt
+                          ? Math.max(
+                              0,
+                              Math.floor(
+                                (now -
+                                  new Date(submission.queuedAt).getTime()) /
+                                  60000,
+                              ),
+                            )
+                          : null;
+                        const isStuck =
+                          submission.gradingError?.final ||
+                          (waitMin !== null && waitMin >= 15);
+                        return (
+                          <>
+                            {waitMin !== null && (
+                              <span className="text-[10px] font-bold text-slate-400">
+                                ⏳ {waitMin} min
+                              </span>
+                            )}
+                            {isStuck && (
+                              <button
+                                onClick={() =>
+                                  handleEvaluateOne(submission._id)
+                                }
+                                disabled={requeueingId === submission._id}
+                                className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm"
+                              >
+                                {requeueingId === submission._id
+                                  ? "Sending..."
+                                  : "Evaluate"}
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
+
+                    <span
+                      className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${
+                        isSubmitted
+                          ? "bg-emerald-100 text-emerald-700"
+                          : isQueued
+                            ? "bg-indigo-100 text-indigo-700"
+                            : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {isSubmitted
+                        ? "Submitted"
+                        : isQueued
+                          ? "In Queue"
+                          : "Not Submitted"}
+                    </span>
+
+                    {(isSubmitted || isQueued) && (
+                      <button
+                        onClick={() => setSelectedSubmissionId(submission._id)}
+                        className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm"
+                      >
+                        {isQueued ? "Review & Grade" : "Check"}
+                      </button>
                     )}
                   </div>
                 </div>
-
-                <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap sm:justify-end">
-                  {isSubmitted &&
-                    (() => {
-                      const score = getDisplayScore(submission);
-                      if (!score) return null;
-                      return (
-                        <span
-                          className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${
-                            score.isOverride
-                              ? "bg-amber-100 text-amber-700"
-                              : "bg-indigo-100 text-indigo-700"
-                          }`}
-                        >
-                          {score.isOverride ? "✍️ Override: " : "🤖 AI: "}
-                          {score.value}/{assignment.totalMarks}
-                        </span>
-                      );
-                    })()}
-
-                  {hasFlags && (
-                    <span className="text-[10px] font-black bg-red-100 text-red-700 px-2.5 py-1 rounded uppercase tracking-wide">
-                      ⚠️ {submission.tabSwitchCount} tab switches
-                    </span>
-                  )}
-
-                  {submission?.status === "ongoing" && (
-                    <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-2.5 py-1 rounded uppercase tracking-wide">
-                      In Progress
-                    </span>
-                  )}
-
-                  {isQueued &&
-                    (() => {
-                      const waitMin = submission.queuedAt
-                        ? Math.max(
-                            0,
-                            Math.floor(
-                              (now - new Date(submission.queuedAt).getTime()) /
-                                60000,
-                            ),
-                          )
-                        : null;
-                      const isStuck =
-                        submission.gradingError?.final ||
-                        (waitMin !== null && waitMin >= 15);
-                      return (
-                        <>
-                          {waitMin !== null && (
-                            <span className="text-[10px] font-bold text-slate-400">
-                              ⏳ {waitMin} min
-                            </span>
-                          )}
-                          {isStuck && (
-                            <button
-                              onClick={() => handleEvaluateOne(submission._id)}
-                              disabled={requeueingId === submission._id}
-                              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm"
-                            >
-                              {requeueingId === submission._id
-                                ? "Sending..."
-                                : "Evaluate"}
-                            </button>
-                          )}
-                        </>
-                      );
-                    })()}
-
-                  <span
-                    className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${
-                      isSubmitted
-                        ? "bg-emerald-100 text-emerald-700"
-                        : isQueued
-                          ? "bg-indigo-100 text-indigo-700"
-                          : "bg-slate-100 text-slate-500"
-                    }`}
-                  >
-                    {isSubmitted
-                      ? "Submitted"
-                      : isQueued
-                        ? "In Queue"
-                        : "Not Submitted"}
-                  </span>
-
-                  {(isSubmitted || isQueued) && (
-                    <button
-                      onClick={() => setSelectedSubmissionId(submission._id)}
-                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-sm"
-                    >
-                      {isQueued ? "Review & Grade" : "Check"}
-                    </button>
-                  )}
-                </div>
-              </div>
+              </React.Fragment>
             );
           })
         )}

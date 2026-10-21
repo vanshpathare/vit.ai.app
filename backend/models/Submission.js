@@ -72,6 +72,11 @@ const submissionSchema = new mongoose.Schema(
       default: "",
     },
 
+    extractedText: {
+      type: String,
+      default: "",
+    },
+
     // Operational Lifecycle State
     status: {
       type: String,

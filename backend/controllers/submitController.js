@@ -9,6 +9,7 @@ import { uploadToR2 } from "../services/r2Service.js";
 import { generateImagePHash, comparePHashes } from "../utils/imageHashUtils.js";
 import { evaluateUploadWithRouter } from "../services/uploadAiRouter.js";
 import { calculateTextSimilarity } from "../utils/textSimilarityUtils.js";
+import { enqueueUploadGrading } from "../utils/enqueueUploadGrading.js";
 
 // A queued submission older than this is considered "stuck" (teacher gets an Evaluate button)
 const STUCK_AFTER_MS = 15 * 60 * 1000;
@@ -395,7 +396,22 @@ export const getAssignmentSubmissions = async (req, res) => {
   const { status } = req.query;
 
   try {
-    let queryFilter = { assignmentId };
+    const assignment = await getCachedAssignment(assignmentId);
+    if (!assignment) {
+      return res.status(404).json({ message: "Assignment not found." });
+    }
+
+    // 🟡 2. CROSS-DIVISION LOOKUP: Find all assignment IDs sharing this same assignment code
+    let targetAssignmentIds = [assignment._id];
+    if (assignment.assignmentCode) {
+      const matchingAssignments = await Assignment.find({
+        assignmentCode: assignment.assignmentCode,
+      }).select("_id");
+      targetAssignmentIds = matchingAssignments.map((a) => a._id);
+    }
+
+    // 🟡 3. QUERY SUBMISSIONS ACROSS ALL MATCHING ASSIGNMENT IDs IN THE POOL
+    let queryFilter = { assignmentId: { $in: targetAssignmentIds } };
     if (status) {
       queryFilter.status = status;
     }
@@ -403,7 +419,12 @@ export const getAssignmentSubmissions = async (req, res) => {
     const sort = status === "queued" ? { queuedAt: 1 } : { submittedAt: -1 };
 
     const submissions = await Submission.find(queryFilter)
-      .populate("studentId", "name email")
+      .populate("studentId", "name email rollNumber ")
+      .populate({
+        path: "assignmentId",
+        select: "title classId",
+        populate: { path: "classId", select: "name" }, // 🟢 Safely populate the classroom name from the assignment
+      })
       .sort(sort);
 
     res.status(200).json(submissions);
@@ -593,7 +614,7 @@ export const reevaluateStuckSubmissions = async (req, res) => {
     const stuck = await Submission.find({
       assignmentId,
       status: "queued",
-      $or: [{ "gradingError.final": true }, { queuedAt: { $lt: cutoff } }],
+      //$or: [{ "gradingError.final": true }, { queuedAt: { $lt: cutoff } }],
     });
 
     let requeued = 0;
@@ -812,7 +833,7 @@ export const logSubmissionInfraction = async (req, res) => {
   }
 };
 
-// 🆕 TEACHER: BULK EVALUATE ALL QUEUED UPLOAD SUBMISSIONS (WITH REDIS + INLINE FALLBACK)
+// 🆕 TEACHER: BULK EVALUATE ALL QUEUED UPLOAD SUBMISSIONS (WITH REDIS + ATTACHMENTS & PROMPT CONTEXT)
 export const reevaluateQueuedUploads = async (req, res) => {
   try {
     const { assignmentId } = req.params;
@@ -827,31 +848,69 @@ export const reevaluateQueuedUploads = async (req, res) => {
     }
 
     if (assignment.modality !== "Upload") {
-      return res
-        .status(400)
-        .json({
-          message: "This route is exclusively for Upload modality assignments.",
-        });
+      return res.status(400).json({
+        message: "This route is exclusively for Upload modality assignments.",
+      });
     }
 
-    const queuedSubmissions = await Submission.find({
+    const queuedCount = await Submission.countDocuments({
       assignmentId,
       status: "queued",
     });
 
-    if (queuedSubmissions.length === 0) {
-      return res
-        .status(200)
-        .json({
-          message: "No queued upload submissions found to evaluate.",
-          evaluatedCount: 0,
-        });
+    if (queuedCount === 0) {
+      return res.status(200).json({
+        message: "No queued upload submissions found to evaluate.",
+        evaluatedCount: 0,
+      });
     }
 
-    let evaluatedCount = 0;
-    let fallbackCount = 0;
-    let skippedCount = 0;
+    // 🟢 Dispatch to our dedicated Upload Worker Queue via Redis!
+    try {
+      await enqueueUploadGrading({ assignmentId, teacherId: req.user._id });
+      return res.status(202).json({
+        message: `Evaluation started in the background for ${queuedCount} submission(s) via upload queue!`,
+        queuedCount,
+      });
+    } catch (redisErr) {
+      console.warn("⚠️ Redis upload queue unavailable:", redisErr.message);
+      return res.status(500).json({
+        message: "Queue service unreachable. Please ensure Redis is running.",
+      });
+    }
+  } catch (error) {
+    console.error("❌ Bulk upload dispatch failure:", error);
+    res.status(500).json({
+      message: "Could not process bulk upload evaluation.",
+      error: error.message,
+    });
+  }
+};
 
+// 🆕 TEACHER: RE-EVALUATE A SINGLE UPLOAD SUBMISSION
+export const reevaluateSingleUpload = async (req, res) => {
+  try {
+    const submission = await Submission.findById(req.params.id);
+    if (!submission) {
+      return res.status(404).json({ message: "Submission not found." });
+    }
+
+    const assignment = await getCachedAssignment(submission.assignmentId);
+    if (!assignment) {
+      return res.status(404).json({ message: "Assignment not found." });
+    }
+
+    if (!(await teacherOwnsAssignment(assignment, req.user._id))) {
+      return res.status(403).json({ message: "Unauthorized action." });
+    }
+
+    if (assignment.modality !== "Upload") {
+      return res.status(400).json({
+        message: "This route is exclusively for Upload modality assignments.",
+      });
+    }
+
+    // Cross-division assignment lookup for plagiarism clustering
     let targetAssignmentIds = [assignment._id];
     if (assignment.assignmentCode) {
       const matchingAssignments = await Assignment.find({
@@ -862,138 +921,172 @@ export const reevaluateQueuedUploads = async (req, res) => {
 
     const existingSubmissions = await Submission.find({
       assignmentId: { $in: targetAssignmentIds },
+      _id: { $ne: submission._id },
     });
 
-    const targetQuestion =
-      assignment.questionPool?.[0] || "General Assignment Submission";
-    const criteriaMapObj = Object.fromEntries(
-      assignment.evaluationCriteria || new Map(),
-    );
+    // 🟢 CLEANED MANUAL PROMPTS & INSTRUCTIONS FORMATTING
+    const manualQuestions = assignment.questionPool?.join("\n- ") || "";
+    const manualInstructions = assignment.instructions || "";
+
+    const targetQuestion = `
+        Assignment Title: ${assignment.title || "Assignment"}
+        Teacher's Instructions: ${manualInstructions}
+        Specific Questions to Answer:
+        - ${manualQuestions}
+        `.trim();
+
+    // Safe criteria extraction
+    let criteriaMapObj = {};
+    if (assignment.evaluationCriteria) {
+      if (assignment.evaluationCriteria instanceof Map) {
+        for (let [key, val] of assignment.evaluationCriteria.entries()) {
+          criteriaMapObj[key] = val;
+        }
+      } else if (typeof assignment.evaluationCriteria === "object") {
+        criteriaMapObj = assignment.evaluationCriteria;
+      }
+    }
+
+    // Fetch student's uploaded files + teacher's reference attachments
+    const filesForEvaluation = [];
+
+    // A. Fetch student pages
+    for (const file of submission.uploadedFiles || []) {
+      try {
+        if (file.fileUrl) {
+          console.log(
+            `📥 [Single Upload Re-eval] Fetching student file: ${file.fileUrl}`,
+          );
+          const fetchRes = await fetch(file.fileUrl);
+          if (fetchRes.ok) {
+            const arrayBuffer = await fetchRes.arrayBuffer();
+            const buffer = Buffer.from(arrayBuffer);
+            filesForEvaluation.push({
+              originalname: file.fileName || "uploaded_page.jpg",
+              mimetype:
+                file.fileType === "pdf" ? "application/pdf" : "image/jpeg",
+              buffer: buffer,
+            });
+          }
+        }
+      } catch (fetchErr) {
+        console.warn(
+          `⚠️ Could not fetch student file buffer:`,
+          fetchErr.message,
+        );
+      }
+    }
+
+    // B. 🟢 Fetch teacher reference attachments
+    if (assignment.attachments && assignment.attachments.length > 0) {
+      for (const att of assignment.attachments) {
+        try {
+          if (att.url) {
+            console.log(
+              `📥 [Single Upload Re-eval] Fetching teacher attachment context: ${att.url}`,
+            );
+            const attRes = await fetch(att.url);
+            if (attRes.ok) {
+              const attBuffer = Buffer.from(await attRes.arrayBuffer());
+              filesForEvaluation.push({
+                originalname:
+                  att.fileName || att.title || "teacher_reference.docx",
+                mimetype:
+                  att.fileType === "pdf"
+                    ? "application/pdf"
+                    : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                buffer: attBuffer,
+              });
+            }
+          }
+        } catch (attErr) {
+          console.warn(
+            `⚠️ Could not fetch teacher attachment buffer:`,
+            attErr.message,
+          );
+        }
+      }
+    }
+
+    // Run AI Evaluation via router
+    let aiResult = null;
+    try {
+      aiResult = await evaluateUploadWithRouter({
+        question: targetQuestion,
+        files: filesForEvaluation,
+        criteriaMap: criteriaMapObj,
+        aiNotes: assignment.aiNotes,
+      });
+    } catch (evalErr) {
+      console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
+      aiResult = {
+        isScreenCapture: false,
+        isSyntheticHandwriting: false,
+        scores: {},
+        totalScoreGivenByAI: 0,
+        feedback: `Automated evaluation error: ${evalErr.message}`,
+        transcribedText: "",
+      };
+    }
+
+    // 🟢 1. SAVE EXACT EXTRACTED TEXT
+    submission.extractedText = aiResult.transcribedText || "";
+
+    // 🟢 2. CROSS-DIVISION TEXT SIMILARITY CHECK USING EXACT EXTRACTED TEXT
     const thresholdPercentage =
       assignment.uploadConfig?.similarityThreshold ?? 85;
     const similarityThresholdRatio = thresholdPercentage / 100;
 
-    for (const submission of queuedSubmissions) {
-      try {
-        // 🟢 STEP 1: Attempt to enqueue via Redis/BullMQ first
-        try {
-          await enqueueGrading({
-            submissionId: submission._id,
-            assignment,
-            responses: submission.responses || [],
-          });
-          evaluatedCount++;
-          continue; // Successfully handed off to Redis queue
-        } catch (redisErr) {
-          // Redis down or unreachable: trigger inline fallback execution immediately
-          console.warn(
-            `⚠️ Redis queue unreachable for bulk upload evaluation (${submission._id}), executing inline fallback:`,
-            redisErr.message,
-          );
-          fallbackCount++;
-        }
+    let textPlagiarismDetected = false;
+    let textMatchedStudentId = null;
+    let plagiarismClusterId = submission.plagiarismClusterId || null;
+    const studentRawText = submission.extractedText;
 
-        // 🟢 STEP 2: INLINE FALLBACK EXECUTION (If Redis fails)
-        const filesForEvaluation = [];
-        for (const file of submission.uploadedFiles || []) {
-          try {
-            if (file.fileUrl) {
-              const fetchRes = await fetch(file.fileUrl);
-              const arrayBuffer = await fetchRes.arrayBuffer();
-              filesForEvaluation.push({
-                originalname: file.fileName || "uploaded_page.jpg",
-                mimetype:
-                  file.fileType === "pdf" ? "application/pdf" : "image/jpeg",
-                buffer: Buffer.from(arrayBuffer),
-              });
-            }
-          } catch (fetchErr) {
-            console.warn(
-              `⚠️ Could not fetch file buffer for inline fallback:`,
-              fetchErr.message,
-            );
-          }
-        }
-
-        let aiResult = null;
-        try {
-          aiResult = await evaluateUploadWithRouter({
-            question: targetQuestion,
-            files: filesForEvaluation,
-            criteriaMap: criteriaMapObj,
-            aiNotes: assignment.aiNotes,
-          });
-        } catch (evalErr) {
-          console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
-          aiResult = {
-            isScreenCapture: false,
-            isSyntheticHandwriting: false,
-            scores: {},
-            totalScoreGivenByAI: 0,
-            feedback: `Automated evaluation error: ${evalErr.message}`,
-          };
-        }
-
-        let textPlagiarismDetected = false;
-        let textMatchedStudentId = null;
-        let plagiarismClusterId = submission.plagiarismClusterId || null;
-        const studentFeedbackText = aiResult?.feedback || "";
-
-        if (studentFeedbackText.trim().length > 15) {
-          for (const sub of existingSubmissions) {
-            if (sub._id.toString() === submission._id.toString()) continue;
-            const peerFeedbackText = sub.aiEvaluation?.feedback || "";
-            const similarityScore = calculateTextSimilarity(
-              studentFeedbackText,
-              peerFeedbackText,
-            );
-
-            if (similarityScore >= similarityThresholdRatio) {
-              textPlagiarismDetected = true;
-              textMatchedStudentId = sub.studentId;
-              plagiarismClusterId = sub.plagiarismClusterId || sub._id;
-              break;
-            }
-          }
-        }
-
-        if (textPlagiarismDetected && !plagiarismClusterId) {
-          plagiarismClusterId = submission._id;
-        }
-
-        submission.isTextPlagiarism = textPlagiarismDetected;
-        submission.plagiarismClusterId = plagiarismClusterId;
-        if (textPlagiarismDetected) {
-          submission.plagiarismDetails =
-            `${submission.plagiarismDetails || ""} | Text similarity match with cross-division student ID: ${textMatchedStudentId}`.trim();
-        }
-
-        submission.aiEvaluation = {
-          scores: aiResult.scores || {},
-          totalScoreGivenByAI: aiResult.totalScoreGivenByAI || 0,
-          feedback: `${aiResult.isScreenCapture ? "🚨 [Flagged: Screen Capture Photo] " : ""}${aiResult.isSyntheticHandwriting ? "🚨 [Flagged: Text-to-Handwriting Tool / Printout] " : ""}${aiResult.feedback || ""}`,
-        };
-
-        submission.status = "submitted";
-        await submission.save();
-      } catch (err) {
-        console.warn(
-          `⚠️ Could not process evaluation for ${submission._id}:`,
-          err.message,
+    if (studentRawText && studentRawText.trim().length > 15) {
+      for (const sub of existingSubmissions) {
+        const peerRawText = sub.extractedText || "";
+        const similarityScore = calculateTextSimilarity(
+          studentRawText,
+          peerRawText,
         );
-        skippedCount++;
+
+        if (similarityScore >= similarityThresholdRatio) {
+          textPlagiarismDetected = true;
+          textMatchedStudentId = sub.studentId;
+          plagiarismClusterId = sub.plagiarismClusterId || sub._id;
+          break;
+        }
       }
     }
 
-    res.status(200).json({
-      message: `Successfully processed bulk evaluation (Queued via Redis: ${evaluatedCount}, Inline Fallback: ${fallbackCount}).`,
-      evaluatedCount: evaluatedCount + fallbackCount,
-      skippedCount,
+    if (textPlagiarismDetected && !plagiarismClusterId) {
+      plagiarismClusterId = submission._id;
+    }
+
+    submission.isTextPlagiarism = textPlagiarismDetected;
+    submission.plagiarismClusterId = plagiarismClusterId;
+    if (textPlagiarismDetected) {
+      submission.plagiarismDetails =
+        `${submission.plagiarismDetails || ""} | Exact text match with cross-division student ID: ${textMatchedStudentId}`.trim();
+    }
+
+    submission.aiEvaluation = {
+      scores: aiResult.scores || {},
+      totalScoreGivenByAI: aiResult.totalScoreGivenByAI || 0,
+      feedback: `${aiResult.isScreenCapture ? "🚨 [Flagged: Screen Capture Photo] " : ""}${aiResult.isSyntheticHandwriting ? "🚨 [Flagged: Text-to-Handwriting Tool / Printout] " : ""}${aiResult.feedback || ""}`,
+    };
+
+    submission.status = "submitted";
+    await submission.save();
+
+    return res.status(200).json({
+      message: "Upload submission re-evaluated successfully by AI.",
+      submission,
     });
   } catch (error) {
-    console.error("❌ Bulk upload evaluation failure:", error);
+    console.error("❌ Single upload re-evaluate failure:", error);
     res.status(500).json({
-      message: "Could not process bulk upload evaluation.",
+      message: "Could not re-evaluate this upload submission.",
       error: error.message,
     });
   }

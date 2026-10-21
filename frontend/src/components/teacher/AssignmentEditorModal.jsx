@@ -44,6 +44,9 @@ function AssignmentEditorModal({
   const [similarityThreshold, setSimilarityThreshold] = useState(
     existingAssignment?.uploadConfig?.similarityThreshold || 85,
   );
+  const [enableTextPlagiarism, setEnableTextPlagiarism] = useState(
+    existingAssignment?.enableTextPlagiarism ?? false,
+  );
   const [assignmentCode, setAssignmentCode] = useState(
     existingAssignment?.assignmentCode || "",
   );
@@ -263,6 +266,7 @@ function AssignmentEditorModal({
     if (modality === "Upload") {
       formData.append("allowedUploadType", allowedUploadType);
       formData.append("maxPages", parseInt(maxPages) || 10);
+
       formData.append(
         "similarityThreshold",
         parseFloat(similarityThreshold) || 85,
@@ -272,6 +276,18 @@ function AssignmentEditorModal({
       }
       if (questionPaperFile) {
         formData.append("questionPaper", questionPaperFile);
+      }
+    }
+
+    formData.append("enableTextPlagiarism", enableTextPlagiarism);
+    if (enableTextPlagiarism) {
+      // 🟢 Append the custom threshold value so the backend receives it
+      formData.append(
+        "similarityThreshold",
+        parseFloat(similarityThreshold) || 85,
+      );
+      if (assignmentCode.trim()) {
+        formData.append("assignmentCode", assignmentCode.trim());
       }
     }
 
@@ -440,6 +456,73 @@ function AssignmentEditorModal({
             </div>
           </div>
 
+          {modality === "Text-Only" && (
+            <div className="space-y-4 bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-bold text-slate-800">
+                    Enable Cross-Division Text Plagiarism Check
+                  </p>
+                  <p className="text-[11px] text-slate-400 font-medium">
+                    Automatically compares student text responses against peer
+                    submissions using an assignment code.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={enableTextPlagiarism}
+                  onClick={() => setEnableTextPlagiarism((p) => !p)}
+                  className={`inline-flex h-6 w-11 shrink-0 items-center rounded-full border-0 p-0.5 transition-colors duration-200 focus:outline-none ${
+                    enableTextPlagiarism ? "bg-indigo-600" : "bg-slate-300"
+                  }`}
+                >
+                  <span
+                    className={`h-5 w-5 rounded-full bg-white shadow-md transition-transform duration-200 ${
+                      enableTextPlagiarism ? "translate-x-5" : "translate-x-0"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {enableTextPlagiarism && (
+                <div className="space-y-3 pt-3 border-t border-slate-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* 🟢 Assignment Code Input */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">
+                        Assignment Code (Required for Plagiarism Grouping)
+                      </label>
+                      <input
+                        type="text"
+                        required={enableTextPlagiarism}
+                        placeholder="e.g. TXT-B60752"
+                        value={assignmentCode}
+                        onChange={(e) => setAssignmentCode(e.target.value)}
+                        className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none uppercase font-mono"
+                      />
+                    </div>
+
+                    {/* 🟢 NEW: Plagiarism Threshold (%) Input */}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase">
+                        Plagiarism Threshold (%)
+                      </label>
+                      <input
+                        type="number"
+                        min="50"
+                        max="100"
+                        value={similarityThreshold}
+                        onChange={(e) => setSimilarityThreshold(e.target.value)}
+                        className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {modality === "Upload" && (
             <div className="space-y-4 bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
               <div>
@@ -477,6 +560,20 @@ function AssignmentEditorModal({
                     max="20"
                     value={maxPages}
                     onChange={(e) => setMaxPages(e.target.value)}
+                    className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase">
+                    Plagiarism Threshold (%)
+                  </label>
+                  <input
+                    type="number"
+                    min="50"
+                    max="100"
+                    value={similarityThreshold}
+                    onChange={(e) => setSimilarityThreshold(e.target.value)}
                     className="w-full h-8 px-2 text-xs bg-white border border-slate-200 rounded focus:border-indigo-600 focus:outline-none"
                   />
                 </div>

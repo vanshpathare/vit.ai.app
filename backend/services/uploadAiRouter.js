@@ -69,7 +69,12 @@ function normalizeUploadEvaluation(raw, criteriaMap) {
     scores[key] = Math.min(Math.max(val, 0), Number(max));
     total += scores[key];
   }
-  return { ...raw, scores, totalScoreGivenByAI: Math.round(total * 100) / 100 };
+  return {
+    ...raw,
+    scores,
+    totalScoreGivenByAI: Math.round(total * 100) / 100,
+    transcribedText: raw.transcribedText || "", // 🟢 Pass along exact transcription
+  };
 }
 
 async function runUploadChain(chain) {
@@ -147,26 +152,34 @@ export async function evaluateUploadWithRouter({
     },
   }));
 
-  // 🛡️ SYSTEM PROMPT WITH SEPARATED FORENSIC CATEGORIES
+  // 🛡️ SYSTEM PROMPT WITH SEPARATED FORENSIC CATEGORIES & TEXT TRANSCRIPTION
   const systemPrompt = `
-You are an expert forensic document examiner and strict academic professor. 
-Before grading content, perform two independent forensic checks on the image/document:
-1. isScreenCapture: Set to true ONLY if the image is a physical photograph of a laptop, phone, or monitor screen (exhibiting Moiré interference waves, RGB subpixel display grids, or monitor borders). Otherwise false.
-2. isSyntheticHandwriting: Set to true ONLY if the text appears to be created via a digital text-to-handwriting font generator tool and printed out on paper (exhibiting 100% identical repeating letter glyphs, flat laser printer ink density, or rigid machine-like baseline tracking). Otherwise false.
+    You are an expert forensic document examiner and a strict academic professor.
+    Before grading content, perform two independent forensic checks on the image/document:
+    1. isScreenCapture: Set to true ONLY if the image is a physical photograph of a laptop, phone, or monitor screen (exhibiting Moiré interference waves, RGB subpixel display grids, or monitor borders). Otherwise false.
+    2. isSyntheticHandwriting: Set to true ONLY if the text appears to be created via a digital text-to-handwriting font generator tool and printed out on paper (exhibiting 100% identical repeating letter glyphs, flat laser printer ink density, or rigid machine-like baseline tracking). Otherwise false.
 
-If either is true, provide a brief description in "fraudReason".
+    If either is true, provide a brief description in "fraudReason".
 
-If legitimate, grade the work strictly against the rubric criteria weights, compute the exact total, and provide feedback.
-Return strict JSON matching: 
-{ 
-  "isScreenCapture": boolean, 
-  "isSyntheticHandwriting": boolean,
-  "fraudReason": "string (optional)", 
-  "scores": { [criterionName]: number }, 
-  "totalScoreGivenByAI": number, 
-  "feedback": "string" 
-}
-`;
+    CRITICAL ACADEMIC EVALUATION & TRANSCRIPTION RULES:
+    - Carefully read the "Target Question" and "Teacher Notes & Focus".
+    - Inspect the student's uploaded handwritten work. 
+    - Transcribe the exact text and answers written by the student across ALL provided pages/files into a single clean continuous string under "transcribedText".
+    - Verify whether the student's submission actually addresses and answers the specific prompt or questions asked. 
+    - If the student has written about an entirely different topic, submitted unrelated notes, or failed to answer the requested questions, you MUST heavily penalize them or award 0 points, and explicitly state in the feedback that the submission does not answer the assignment prompt.
+
+    If legitimate and relevant, grade the work strictly against the rubric criteria weights, compute the exact total, and provide feedback.
+    Return strict JSON matching:
+    {
+        "isScreenCapture": boolean,
+        "isSyntheticHandwriting": boolean,
+        "fraudReason": "string (optional)",
+        "transcribedText": "string",
+        "scores": { [criterionName]: number },
+        "totalScoreGivenByAI": number,
+        "feedback": "string"
+    }
+    `;
 
   const textPrompt = `
 Target Question: "${question}"
@@ -253,6 +266,7 @@ ${aiNotes ? `Teacher Notes & Focus: "${aiNotes}"` : ""}
                 isScreenCapture: { type: Type.BOOLEAN },
                 isSyntheticHandwriting: { type: Type.BOOLEAN },
                 fraudReason: { type: Type.STRING },
+                transcribedText: { type: Type.STRING },
                 scores: {
                   type: Type.OBJECT,
                   properties: dynamicScoreProperties,
@@ -264,6 +278,7 @@ ${aiNotes ? `Teacher Notes & Focus: "${aiNotes}"` : ""}
               required: [
                 "isScreenCapture",
                 "isSyntheticHandwriting",
+                "transcribedText",
                 "scores",
                 "totalScoreGivenByAI",
                 "feedback",

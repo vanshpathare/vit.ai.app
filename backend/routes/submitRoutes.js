@@ -7,6 +7,7 @@ import {
   logSubmissionInfraction,
   reevaluateSubmission,
   reevaluateStuckSubmissions,
+  reevaluateSingleUpload,
 } from "../controllers/submitController.js";
 import { protect, teacherOnly } from "../middleware/authMiddleware.js";
 import { upload } from "../middleware/uploadMiddleware.js";
@@ -40,5 +41,7 @@ router.get("/:id", getStudentSubmissionDetails);
 
 // Target URL: PATCH /api/submissions/log-infraction/:id
 router.patch("/log-infraction/:id", logSubmissionInfraction);
+
+router.post("/:id/reevaluate-upload", teacherOnly, reevaluateSingleUpload);
 
 export default router;

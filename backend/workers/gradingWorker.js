@@ -2,8 +2,10 @@
 import "dotenv/config";
 import { Worker } from "bullmq";
 import Submission from "../models/Submission.js";
+import Assignment from "../models/Assignment.js"; // 🟢 1. Import Assignment model
 import { evaluateWithRouter } from "../services/aiRouter.js";
 import { bullConnection } from "../config/bullConnection.js";
+import { calculateTextSimilarity } from "../utils/textSimilarityUtils.js"; // 🟢 2. Import text similarity utility
 
 export const gradingWorker = new Worker(
   "ai-grading-queue",
@@ -45,6 +47,72 @@ export const gradingWorker = new Worker(
       typeof result.totalScoreGivenByAI !== "number"
     ) {
       throw new Error("AI returned an incomplete evaluation");
+    }
+
+    // 🟢 3. TEXT-ONLY PLAGIARISM CHECK & CLUSTER PROPAGATION
+    if (assignment.assignmentCode) {
+      try {
+        const matchingAssignments = await Assignment.find({
+          assignmentCode: assignment.assignmentCode,
+        }).select("_id");
+        const targetAssignmentIds = matchingAssignments.map((a) => a._id);
+
+        const existingSubmissions = await Submission.find({
+          assignmentId: { $in: targetAssignmentIds },
+          _id: { $ne: submissionId },
+        });
+
+        const studentText = (responses || [])
+          .map((r) => r.answerText || "")
+          .join(" ");
+
+        // 🟡 YOUR CONSOLE LOG HERE
+        console.log(
+          `🔍 [Text Plagiarism] Comparing student text: "${studentText.slice(0, 30)}..." against ${existingSubmissions.length} peers under code: ${assignment.assignmentCode}`,
+        );
+
+        const thresholdPercentage = assignment.similarityThreshold ?? 85;
+        const similarityThresholdRatio = thresholdPercentage / 100;
+
+        let textPlagiarismDetected = false;
+        let matchedClusterId = null;
+
+        if (studentText.trim().length > 15) {
+          for (const peerSub of existingSubmissions) {
+            const peerText = (peerSub.responses || [])
+              .map((r) => r.answerText || "")
+              .join(" ");
+            const similarityScore = calculateTextSimilarity(
+              studentText,
+              peerText,
+            );
+
+            if (similarityScore >= similarityThresholdRatio) {
+              textPlagiarismDetected = true;
+              matchedClusterId = peerSub.plagiarismClusterId || peerSub._id;
+              break;
+            }
+          }
+        }
+
+        if (textPlagiarismDetected) {
+          await Submission.findByIdAndUpdate(submissionId, {
+            isTextPlagiarism: true,
+            plagiarismClusterId: matchedClusterId,
+          });
+          await Submission.findByIdAndUpdate(matchedClusterId, {
+            isTextPlagiarism: true,
+            plagiarismClusterId: matchedClusterId,
+          });
+        } else {
+          await Submission.findByIdAndUpdate(submissionId, {
+            isTextPlagiarism: false,
+            plagiarismClusterId: null,
+          });
+        }
+      } catch (plagErr) {
+        console.warn("⚠️ Text plagiarism check warning:", plagErr.message);
+      }
     }
 
     // Conditional save: only if the submission is STILL queued, so a manual

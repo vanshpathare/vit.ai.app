@@ -61,23 +61,38 @@ const assignmentSchema = new mongoose.Schema(
         default: "handwritten",
       },
       maxPages: { type: Number, default: 10 },
-      similarityThreshold: { type: Number, default: 85 },
+      // similarityThreshold: { type: Number, default: 85 },
     },
 
+    enableTextPlagiarism: {
+      type: Boolean,
+      default: false,
+    },
+    similarityThreshold: {
+      type: Number,
+      default: function () {
+        return this.modality === "Upload" ||
+          this.enableTextPlagiarism === true ||
+          this.enableTextPlagiarism === "true"
+          ? 85
+          : undefined;
+      },
+    },
     assignmentCode: {
       type: String,
-      unique: true,
       sparse: true,
       uppercase: true,
       trim: true,
       required: function () {
-        return this.modality === "Upload";
+        return this.modality === "Upload" || this.enableTextPlagiarism === true;
       },
     },
 
     speechQuestionCount: {
       type: Number,
-      default: 4, // Default fallback limit for speech vitas if not specified
+      default: function () {
+        return this.modality === "Speech-Only" ? 4 : undefined;
+      },
     },
     totalMarks: {
       type: Number,

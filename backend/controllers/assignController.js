@@ -149,6 +149,7 @@ export const createAssignment = async (req, res) => {
       allowedUploadType,
       maxPages,
       similarityThreshold,
+      enableTextPlagiarism,
     } = req.body;
 
     // 🟢 PARSE JSON STRINGS FROM FORMDATA
@@ -307,16 +308,23 @@ export const createAssignment = async (req, res) => {
       allowMultipleSubmissions:
         allowMultipleSubmissions === "true" ||
         allowMultipleSubmissions === true,
-      ...(modality === "Upload" && {
+      enableTextPlagiarism:
+        enableTextPlagiarism === "true" || enableTextPlagiarism === true,
+      ...((modality === "Upload" ||
+        enableTextPlagiarism === "true" ||
+        enableTextPlagiarism === true) && {
         assignmentCode:
           assignmentCode && assignmentCode.trim() !== ""
             ? assignmentCode.toUpperCase()
-            : "UP-" + crypto.randomBytes(3).toString("hex").toUpperCase(),
-        uploadConfig: {
-          allowedUploadType: allowedUploadType || "handwritten",
-          maxPages: parseInt(maxPages) || 5,
-          similarityThreshold: parseFloat(similarityThreshold) || 85,
-        },
+            : (modality === "Upload" ? "UP-" : "TXT-") +
+              crypto.randomBytes(3).toString("hex").toUpperCase(),
+        ...(modality === "Upload" && {
+          uploadConfig: {
+            allowedUploadType: allowedUploadType || "handwritten",
+            maxPages: parseInt(maxPages) || 5,
+            similarityThreshold: parseFloat(similarityThreshold) || 85,
+          },
+        }),
       }),
     });
 
@@ -600,6 +608,7 @@ export const updateAssignmentSettings = async (req, res) => {
       allowedUploadType,
       maxPages,
       similarityThreshold,
+      enableTextPlagiarism,
     } = req.body;
 
     let parsedQuestionPool = assignment.questionPool;
@@ -727,6 +736,18 @@ export const updateAssignmentSettings = async (req, res) => {
           parseFloat(similarityThreshold);
       if (assignmentCode)
         assignment.assignmentCode = assignmentCode.toUpperCase();
+    }
+
+    if (enableTextPlagiarism !== undefined) {
+      assignment.enableTextPlagiarism =
+        enableTextPlagiarism === "true" || enableTextPlagiarism === true;
+    }
+
+    if (assignmentCode !== undefined && assignmentCode.trim() !== "") {
+      assignment.assignmentCode = assignmentCode.toUpperCase();
+    } else if (assignment.enableTextPlagiarism && !assignment.assignmentCode) {
+      assignment.assignmentCode =
+        "TXT-" + crypto.randomBytes(3).toString("hex").toUpperCase();
     }
 
     if (isResultPublished !== undefined) {

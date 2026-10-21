@@ -115,7 +115,12 @@ export const reevaluateSubmissionAPI = (submissionId) =>
   API.post(`/submissions/${submissionId}/reevaluate`);
 export const reevaluateStuckSubmissionsAPI = (assignmentId) =>
   API.post(`/submissions/assignment/${assignmentId}/reevaluate-stuck`);
+// 🟢 SINGLE UPLOAD RE-EVALUATION (Without duplicate /submissions prefix)
+export const reevaluateSingleUploadAPI = (submissionId) =>
+  API.post(`/submissions/${submissionId}/reevaluate-upload`);
+
+// 🟢 BULK QUEUED UPLOADS (Mounted under assignments router)
 export const reevaluateQueuedUploadsAPI = (assignmentId) =>
-  axiosInstance.post(`/assignments/${assignmentId}/reevaluate-uploads`);
+  API.post(`/assignments/${assignmentId}/reevaluate-uploads`);
 
 export default API;

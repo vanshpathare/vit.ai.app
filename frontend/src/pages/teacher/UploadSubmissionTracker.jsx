@@ -8,6 +8,7 @@ import {
   reevaluateSubmissionAPI,
   reevaluateStuckSubmissionsAPI,
   reevaluateQueuedUploadsAPI,
+  reevaluateSingleUploadAPI,
 } from "../../services/api";
 import AssignmentEditorModal from "../../components/teacher/AssignmentEditorModal";
 import SubmissionDetailModal from "../../components/teacher/SubmissionDetailModal"; // 🟢 Dedicated modal component import
@@ -46,6 +47,7 @@ function UploadSubmissionTracker() {
   const [roster, setRoster] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isEvaluating, setIsEvaluating] = useState(false);
 
   // 🟢 Dedicated Upload Filters
   const [filter, setFilter] = useState("all"); // all | submitted | not_submitted | queued | same_content | same_upload | screen_image | ai_handwriting
@@ -96,17 +98,18 @@ function UploadSubmissionTracker() {
 
   useEffect(() => {
     if (!hasQueued) return;
-    const timer = setInterval(refreshSubmissions, 15000);
+    const timer = setInterval(refreshSubmissions, 3000);
     return () => clearInterval(timer);
   }, [hasQueued, assignmentId]);
 
+  // 🟢 1. DEFINE handleEvaluateOne HERE
   const handleEvaluateOne = async (submissionId) => {
     setRequeueingId(submissionId);
     try {
-      await reevaluateSubmissionAPI(submissionId);
+      await reevaluateSingleUploadAPI(submissionId); // Calls your single upload API
       await refreshSubmissions();
     } catch (err) {
-      alert(err.response?.data?.message || "Could not re-send for evaluation.");
+      alert(err.response?.data?.message || "Could not re-evaluate submission.");
     } finally {
       setRequeueingId(null);
     }
@@ -114,14 +117,16 @@ function UploadSubmissionTracker() {
 
   const handleEvaluateStuck = async () => {
     setIsBulkRequeueing(true);
+    setIsEvaluating(true); // 🟢 Activate progress view
     try {
-      const res = await reevaluateQueuedUploadsAPI(assignmentId);
-      alert(res.data?.message || "Done.");
+      await reevaluateQueuedUploadsAPI(assignmentId);
       await refreshSubmissions();
     } catch (err) {
+      console.error("❌ Bulk Evaluation Error Details:", err);
       alert(
-        err.response?.data?.message || "Could not re-send stuck submissions.",
+        err.response?.data?.message || "Could not trigger bulk evaluation.",
       );
+      setIsEvaluating(false); // Reset if it fails
     } finally {
       setIsBulkRequeueing(false);
     }
@@ -149,6 +154,31 @@ function UploadSubmissionTracker() {
     );
     return { student, submission };
   });
+
+  const localStudentIds = new Set(roster.map((r) => r._id.toString()));
+  const externalClusterSubmissions = submissions.filter((sub) => {
+    if (!sub.isTextPlagiarism || !sub.plagiarismClusterId) return false;
+    const subStudentId =
+      sub.studentId?._id?.toString() || sub.studentId?.toString();
+    return !localStudentIds.has(subStudentId);
+  });
+
+  const externalRows = externalClusterSubmissions.map((sub) => {
+    const teamName = sub.assignmentId?.classId?.name || "Other Division";
+    return {
+      student: {
+        _id: sub.studentId?._id || sub.studentId,
+        name: sub.studentId?.name || "External Student",
+        email: sub.studentId?.email || "Other Division",
+        rollNumber: sub.studentId?.rollNumber || "EXT",
+        teamName: teamName,
+        classId: "external-class",
+      },
+      submission: sub,
+    };
+  });
+
+  const allTrackerRows = [...mergedRows, ...externalRows];
 
   const getDisplayScore = (submission) => {
     if (!submission) return null;
@@ -179,6 +209,12 @@ function UploadSubmissionTracker() {
       !submission || !["submitted", "queued"].includes(submission.status),
   ).length;
 
+  useEffect(() => {
+    if (queuedCount === 0) {
+      setIsEvaluating(false);
+    }
+  }, [queuedCount]);
+
   const sameContentCount = submissions.filter((s) => s.isTextPlagiarism).length;
   const sameUploadCount = submissions.filter(
     (s) => s.isVisualPlagiarism,
@@ -190,8 +226,10 @@ function UploadSubmissionTracker() {
     s.aiEvaluation?.feedback?.includes("Text-to-Handwriting"),
   ).length;
 
+  const rowsToFilter = filter === "same_content" ? allTrackerRows : mergedRows;
+
   // 🔍 Filter logic
-  const filteredRows = mergedRows.filter(({ submission }) => {
+  const filteredRows = rowsToFilter.filter(({ submission }) => {
     if (filter === "submitted") return submission?.status === "submitted";
     if (filter === "not_submitted")
       return (
@@ -208,6 +246,21 @@ function UploadSubmissionTracker() {
       );
     return true;
   });
+
+  const clusteredRows =
+    filter === "same_content"
+      ? [...filteredRows].sort((a, b) => {
+          const clusterA =
+            a.submission?.plagiarismClusterId?._id?.toString() ||
+            a.submission?.plagiarismClusterId?.toString() ||
+            "";
+          const clusterB =
+            b.submission?.plagiarismClusterId?._id?.toString() ||
+            b.submission?.plagiarismClusterId?.toString() ||
+            "";
+          return clusterA.localeCompare(clusterB);
+        })
+      : filteredRows;
 
   if (isLoading) {
     return (
@@ -389,19 +442,50 @@ function UploadSubmissionTracker() {
         ))}
       </div>
 
+      {/* 📊 DYNAMIC QUEUE BANNER / PROGRESS BAR */}
       {queuedCount > 0 && (
-        <div className="flex items-center justify-between gap-3 flex-wrap bg-orange-50 border border-orange-200 rounded-xl px-4 py-3">
-          <p className="text-xs sm:text-sm font-semibold text-orange-900">
-            ⏳ {queuedCount} upload submission(s) waiting for AI evaluation &
-            cross-division checks.
-          </p>
-          <button
-            onClick={handleEvaluateStuck}
-            disabled={isBulkRequeueing}
-            className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
-          >
-            {isBulkRequeueing ? "Evaluating..." : "Evaluate all queued"}
-          </button>
+        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4 space-y-3 shadow-sm">
+          {!isEvaluating ? (
+            // 1. Initial State: Clean Banner with a single button
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="text-xs sm:text-sm font-semibold text-orange-900">
+                ⏳ {queuedCount} upload submission(s) waiting for AI evaluation
+                & cross-division checks.
+              </p>
+              <button
+                onClick={handleEvaluateStuck}
+                disabled={isBulkRequeueing}
+                className="px-4 py-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
+              >
+                {isBulkRequeueing ? "Starting..." : "Evaluate all queued"}
+              </button>
+            </div>
+          ) : (
+            // 2. Active Evaluation State: Clean Progress Bar (No duplicate buttons)
+            <div className="space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-orange-600 border-t-transparent rounded-full animate-spin"></div>
+                  <span className="text-xs sm:text-sm font-bold text-orange-900">
+                    AI Forensic Engine is grading uploads in the background...
+                  </span>
+                </div>
+                <span className="text-xs font-extrabold text-orange-700 bg-orange-100 px-2.5 py-1 rounded-full">
+                  {submittedCount} Evaluated • {queuedCount} Remaining
+                </span>
+              </div>
+
+              {/* Progress Bar Track */}
+              <div className="w-full bg-orange-200/60 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-gradient-to-r from-orange-600 to-amber-500 h-full transition-all duration-500 rounded-full"
+                  style={{
+                    width: `${Math.round((submittedCount / (mergedRows.filter((r) => r.submission).length || 1)) * 100)}%`,
+                  }}
+                ></div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -412,7 +496,7 @@ function UploadSubmissionTracker() {
             No submissions match this filter.
           </div>
         ) : (
-          filteredRows.map(({ student, submission }) => {
+          filteredRows.map(({ student, submission }, index) => {
             const isSubmitted = submission?.status === "submitted";
             const isQueued = submission?.status === "queued";
             const isSameUpload = submission?.isVisualPlagiarism;
@@ -423,111 +507,146 @@ function UploadSubmissionTracker() {
               "Text-to-Handwriting",
             );
 
+            // 🟢 Check if student is from another division/team
+            const isExternalStudent =
+              assignment.classId &&
+              student.classId &&
+              student.classId.toString() !==
+                (assignment.classId?._id || assignment.classId).toString();
+
+            // 🟢 Determine if a separator line is needed between different clusters
+            let showSeparator = false;
+            if (filter === "same_content" && index > 0) {
+              const prevCluster =
+                clusteredRows[
+                  index - 1
+                ].submission?.plagiarismClusterId?.toString();
+              const currCluster = submission?.plagiarismClusterId?.toString();
+              if (prevCluster && currCluster && prevCluster !== currCluster) {
+                showSeparator = true;
+              }
+            }
+
             return (
-              <div
-                key={student._id}
-                className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4 sm:px-5 transition-colors ${
-                  isSameUpload || isSameContent || isScreen || isAIHand
-                    ? "bg-red-50/80 border-red-200 shadow-sm"
-                    : "bg-white border-slate-200"
-                }`}
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-9 h-9 rounded-full bg-orange-100 text-orange-600 font-bold text-xs flex items-center justify-center shrink-0 uppercase">
-                    {getInitials(student.name, "ST")}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold text-slate-800 truncate">
-                      <span className="font-mono text-orange-600 mr-1.5">
-                        {student.rollNumber || "—"}
+              <React.Fragment key={student._id || index}>
+                {/* 🟡 4. CLUSTER SEPARATOR DIVIDER BETWEEN DIFFERENT COPY GROUPS */}
+                {showSeparator && (
+                  <div className="relative my-4">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-amber-300 border-dashed"></div>
+                    </div>
+                    <div className="relative flex justify-center">
+                      <span className="bg-amber-50 px-3 text-[10px] font-extrabold text-amber-700 uppercase tracking-widest rounded-full border border-amber-200">
+                        ✂️ Cluster Separator — Different Copy Group
                       </span>
-                      {student.name}
-                    </p>
-                    <p className="text-xs text-slate-400 truncate">
-                      {student.email}
-                    </p>
-
-                    {/* Forensic & Plagiarism Warning Badges */}
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                      {isSameUpload && (
-                        <span className="text-[10px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded">
-                          🚨 Same Upload (Friend's Copy)
-                        </span>
-                      )}
-                      {isSameContent && (
-                        <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
-                          👥 Same Content
-                        </span>
-                      )}
-                      {isScreen && (
-                        <span className="text-[10px] font-black bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
-                          💻 Screen Image
-                        </span>
-                      )}
-                      {isAIHand && (
-                        <span className="text-[10px] font-black bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
-                          🤖 AI Generated Handwriting
-                        </span>
-                      )}
                     </div>
                   </div>
-                </div>
+                )}
 
-                <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap sm:justify-end">
-                  {isSubmitted &&
-                    (() => {
-                      const score = getDisplayScore(submission);
-                      if (!score) return null;
-                      return (
-                        <span
-                          className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${score.isOverride ? "bg-amber-100 text-amber-700" : "bg-orange-100 text-orange-700"}`}
-                        >
-                          {score.isOverride ? "✍️ Override: " : "🤖 AI: "}
-                          {score.value}/{assignment.totalMarks}
-                        </span>
-                      );
-                    })()}
-
-                  <span
-                    className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${isSubmitted ? "bg-emerald-100 text-emerald-700" : isQueued ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-500"}`}
-                  >
-                    {isSubmitted
-                      ? "Submitted"
-                      : isQueued
-                        ? "Queued"
-                        : "Not Submitted"}
-                  </span>
-
-                  {(isSubmitted || isQueued) && (
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={async () => {
-                          try {
-                            await handleEvaluateOne(submission._id);
-                            alert("AI evaluation completed successfully!");
-                            loadData();
-                          } catch (err) {
-                            alert(
-                              err.response?.data?.message ||
-                                "Failed to run AI evaluation.",
-                            );
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
-                      >
-                        Run AI Evaluation 🤖
-                      </button>
-
-                      <button
-                        onClick={() => setSelectedSubmissionId(submission._id)}
-                        className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
-                      >
-                        Review Work
-                      </button>
+                <div
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4 sm:px-5 transition-colors ${
+                    isSameUpload || isSameContent || isScreen || isAIHand
+                      ? "bg-red-50/80 border-red-200 shadow-sm"
+                      : "bg-white border-slate-200"
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-full bg-orange-100 text-orange-600 font-bold text-xs flex items-center justify-center shrink-0 uppercase">
+                      {getInitials(student.name, "ST")}
                     </div>
-                  )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-slate-800 truncate">
+                        <span className="font-mono text-orange-600 mr-1.5">
+                          {student.rollNumber || "—"}
+                        </span>
+                        {student.name}
+                      </p>
+                      <p className="text-xs text-slate-400 truncate">
+                        {student.email}
+                      </p>
+
+                      {/* Forensic & Plagiarism Warning Badges */}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                        {isSameUpload && (
+                          <span className="text-[10px] font-black bg-red-100 text-red-700 px-2 py-0.5 rounded">
+                            🚨 Same Upload (Friend's Copy)
+                          </span>
+                        )}
+                        {isSameContent && (
+                          <span className="text-[10px] font-black bg-amber-100 text-amber-700 px-2 py-0.5 rounded">
+                            👥 Same Content Group
+                          </span>
+                        )}
+                        {/* 🟢 Cross-Division / Other Team Badge */}
+                        {isExternalStudent && (
+                          <span className="text-[10px] font-black bg-purple-100 text-purple-700 px-2 py-0.5 rounded border border-purple-200">
+                            🌐 Cross-Division Match (Other Team)
+                          </span>
+                        )}
+                        {isScreen && (
+                          <span className="text-[10px] font-black bg-purple-100 text-purple-700 px-2 py-0.5 rounded">
+                            💻 Screen Image
+                          </span>
+                        )}
+                        {isAIHand && (
+                          <span className="text-[10px] font-black bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
+                            🤖 AI Generated Handwriting
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap sm:justify-end">
+                    {isSubmitted &&
+                      (() => {
+                        const score = getDisplayScore(submission);
+                        if (!score) return null;
+                        return (
+                          <span
+                            className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${score.isOverride ? "bg-amber-100 text-amber-700" : "bg-orange-100 text-orange-700"}`}
+                          >
+                            {score.isOverride ? "✍️ Override: " : "🤖 AI: "}
+                            {score.value}/{assignment.totalMarks}
+                          </span>
+                        );
+                      })()}
+
+                    <span
+                      className={`text-[10px] font-black px-2.5 py-1 rounded uppercase tracking-wide ${isSubmitted ? "bg-emerald-100 text-emerald-700" : isQueued ? "bg-orange-100 text-orange-700" : "bg-slate-100 text-slate-500"}`}
+                    >
+                      {isSubmitted
+                        ? "Submitted"
+                        : isQueued
+                          ? "Queued"
+                          : "Not Submitted"}
+                    </span>
+
+                    {(isSubmitted || isQueued) && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleEvaluateOne(submission._id)}
+                          disabled={requeueingId === submission._id}
+                          className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
+                        >
+                          {requeueingId === submission._id
+                            ? "Evaluating... ⏳"
+                            : "Run AI Evaluation 🤖"}
+                        </button>
+
+                        <button
+                          onClick={() =>
+                            setSelectedSubmissionId(submission._id)
+                          }
+                          className="px-4 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
+                        >
+                          Review Work
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              </React.Fragment>
             );
           })
         )}
