@@ -308,7 +308,7 @@ function UploadWorkspace() {
         {/* Reference Materials (Teacher attachments) */}
         {assignment.attachments && assignment.attachments.length > 0 && (
           <div className="space-y-3 mb-8">
-            <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">
               Reference materials
             </h3>
             <div className="space-y-2">
@@ -342,13 +342,31 @@ function UploadWorkspace() {
           </div>
         )}
 
+        {assignment.questionPool && assignment.questionPool.length > 0 && (
+          <div className="space-y-2 mb-6">
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">
+              Assignment Questions / Tasks
+            </h3>
+            <div className="bg-white border border-slate-200 rounded-xl p-5 text-sm text-slate-700 space-y-2 shadow-sm">
+              {assignment.questionPool.map((q, idx) => (
+                <div key={idx} className="flex items-start gap-2">
+                  <span className="font-bold text-indigo-600 shrink-0">
+                    {idx + 1}.
+                  </span>
+                  <p className="leading-relaxed">{q}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* My Work Section */}
         <div className="space-y-4 pt-2 border-t border-slate-200">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">
+            <h3 className="text-xs font-black text-slate-700 uppercase tracking-wider">
               My work
             </h3>
-            <span className="text-xs text-slate-400 font-medium">
+            <span className="text-xs text-slate-700 font-medium">
               Max pages allowed: {assignment.uploadConfig?.maxPages || 5}
             </span>
           </div>

@@ -406,17 +406,14 @@ function normalizeUploadEvaluation(raw, criteriaMap, studentRosterName = "") {
     );
 
     // If at least 2 tokens match, or 1 token if the name only has 1 word, consider it valid
-    const matchThreshold = Math.min(1, rosterTokens.length);
-    const isLikelyMatch =
-      matchedTokens.length >= matchThreshold ||
-      (rosterTokens.length === 1 && matchedTokens.length === 1);
-
+    const requiredMatches = rosterTokens.length >= 2 ? 2 : rosterTokens.length;
+    const isLikelyMatch = matchedTokens.length >= requiredMatches;
     if (
       !isLikelyMatch &&
       raw.candidateName.trim() !== "" &&
       raw.candidateName.toLowerCase() !== "unknown"
     ) {
-      nameMismatchWarning = `🚨 [Automatic Penalty: Certificate name "${raw.candidateName}" does not match roster student "${studentRosterName}". Score forced to 0.] `;
+      nameMismatchWarning = ` Name "${raw.candidateName}" does not match roster student "${studentRosterName}". Score forced to 0. `;
 
       for (const key of Object.keys(criteriaMap)) {
         raw.scores[key] = 0;
@@ -626,10 +623,10 @@ export async function evaluateUploadWithRouter({
   const geminiModels = [
     { name: "gemini-3.1-flash-lite", model: "gemini-3.1-flash-lite" },
     { name: "gemini-3.5-flash-lite", model: "gemini-3.5-flash-lite" },
-    // { name: "gemini-3.6-flash", model: "gemini-3.6-flash" },
-    // { name: "gemini-3.8-flash", model: "gemini-3.8-flash" },
-    // { name: "gemini-3.7-flash", model: "gemini-3.7-flash" },
-    // { name: "gemini-2.5-flash", model: "gemini-2.5-flash" },
+    { name: "gemini-3.6-flash", model: "gemini-3.6-flash" },
+    { name: "gemini-3.8-flash", model: "gemini-3.8-flash" },
+    { name: "gemini-3.7-flash", model: "gemini-3.7-flash" },
+    { name: "gemini-2.5-flash", model: "gemini-2.5-flash" },
   ];
 
   for (const gm of geminiModels) {
