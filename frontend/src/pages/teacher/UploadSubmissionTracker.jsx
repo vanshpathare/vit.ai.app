@@ -219,12 +219,24 @@ function UploadSubmissionTracker() {
   const sameUploadCount = submissions.filter(
     (s) => s.isVisualPlagiarism,
   ).length;
-  const screenImageCount = submissions.filter((s) =>
-    s.aiEvaluation?.feedback?.includes("Screen Capture"),
-  ).length;
-  const aiHandwritingCount = submissions.filter((s) =>
-    s.aiEvaluation?.feedback?.includes("Text-to-Handwriting"),
-  ).length;
+
+  const screenImageCount = submissions.filter((s) => {
+    const fb = s.aiEvaluation?.feedback || "";
+    return (
+      fb.includes("Screen Capture") ||
+      fb.includes("screen_capture") ||
+      fb.includes("Screen Image")
+    );
+  }).length;
+
+  const aiHandwritingCount = submissions.filter((s) => {
+    const fb = s.aiEvaluation?.feedback || "";
+    return (
+      fb.includes("Text-to-Handwriting") ||
+      fb.includes("Synthetic Handwriting") ||
+      fb.includes("synthetic_handwriting")
+    );
+  }).length;
 
   const rowsToFilter = filter === "same_content" ? allTrackerRows : mergedRows;
 
@@ -501,11 +513,15 @@ function UploadSubmissionTracker() {
             const isQueued = submission?.status === "queued";
             const isSameUpload = submission?.isVisualPlagiarism;
             const isSameContent = submission?.isTextPlagiarism;
+            const feedbackText = submission?.aiEvaluation?.feedback || "";
             const isScreen =
-              submission?.aiEvaluation?.feedback?.includes("Screen Capture");
-            const isAIHand = submission?.aiEvaluation?.feedback?.includes(
-              "Text-to-Handwriting",
-            );
+              feedbackText.includes("Screen Capture") ||
+              feedbackText.includes("screen_capture") ||
+              feedbackText.includes("Screen Image");
+            const isAIHand =
+              feedbackText.includes("Text-to-Handwriting") ||
+              feedbackText.includes("Synthetic Handwriting") ||
+              feedbackText.includes("synthetic_handwriting");
 
             // 🟢 Check if student is from another division/team
             const isExternalStudent =

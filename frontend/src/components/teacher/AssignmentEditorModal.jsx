@@ -80,6 +80,12 @@ function AssignmentEditorModal({
   const [newLinkUrl, setNewLinkUrl] = useState("");
   const [newLinkTitle, setNewLinkTitle] = useState("");
   const [newLinks, setNewLinks] = useState([]); // List of { url, title } objects
+  const [hasExistingQuestionPaper, setHasExistingQuestionPaper] = useState(
+    Boolean(
+      existingAssignment?.attachments?.some((att) => att.isQuestionPaper) ||
+      existingAssignment?.questionPaperUrl,
+    ),
+  );
 
   const [criteria, setCriteria] = useState(() => {
     const raw = existingAssignment?.evaluationCriteria;
@@ -277,6 +283,8 @@ function AssignmentEditorModal({
       if (questionPaperFile) {
         formData.append("questionPaper", questionPaperFile);
       }
+
+      formData.append("removeQuestionPaper", !hasExistingQuestionPaper);
     }
 
     formData.append("enableTextPlagiarism", enableTextPlagiarism);
@@ -592,22 +600,54 @@ function AssignmentEditorModal({
                 </div>
               </div>
 
-              <div className="pt-2 border-t border-slate-200 space-y-1.5">
+              <div className="pt-2 border-t border-slate-200 space-y-2">
                 <label className="block text-[11px] font-bold text-slate-700">
-                  🟡 Attach Question Paper Document (PDF / Image / Word)
+                  🟡 Question Paper Document (PDF / Image / Word)
                 </label>
-                <input
-                  type="file"
-                  accept=".pdf,image/*,.docx,.doc"
-                  onChange={(e) =>
-                    setQuestionPaperFile(e.target.files?.[0] || null)
-                  }
-                  className="text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-bold file:bg-orange-600 file:text-white hover:file:bg-orange-700"
-                />
+
+                {/* Show existing question paper if present in edit mode */}
+                {isEditMode &&
+                  hasExistingQuestionPaper &&
+                  !questionPaperFile && (
+                    <div className="flex items-center justify-between p-2 bg-white border border-slate-200 rounded-lg text-xs">
+                      <span className="truncate max-w-md font-medium text-slate-800">
+                        📄 Current Question Paper Attached
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setHasExistingQuestionPaper(false)}
+                        className="text-red-600 hover:text-red-700 font-bold ml-2 shrink-0 cursor-pointer"
+                      >
+                        ✕ Remove Question Paper
+                      </button>
+                    </div>
+                  )}
+
+                {/* File input for uploading or replacing */}
+                {(!hasExistingQuestionPaper || questionPaperFile) && (
+                  <input
+                    type="file"
+                    accept=".pdf,image/*,.docx,.doc"
+                    onChange={(e) =>
+                      setQuestionPaperFile(e.target.files?.[0] || null)
+                    }
+                    className="text-xs text-slate-600 file:mr-3 file:py-1.5 file:px-3 file:rounded file:border-0 file:text-xs file:font-bold file:bg-orange-600 file:text-white hover:file:bg-orange-700"
+                  />
+                )}
+
                 {questionPaperFile && (
-                  <p className="text-[11px] text-emerald-600 font-semibold">
-                    📎 Selected: {questionPaperFile.name}
-                  </p>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] text-emerald-600 font-semibold">
+                      📎 New Selected: {questionPaperFile.name}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setQuestionPaperFile(null)}
+                      className="text-red-600 text-xs font-bold cursor-pointer"
+                    >
+                      Cancel New File
+                    </button>
+                  </div>
                 )}
               </div>
             </div>

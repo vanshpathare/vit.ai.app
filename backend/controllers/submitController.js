@@ -433,11 +433,13 @@ export const getAssignmentSubmissions = async (req, res) => {
   }
 };
 
-// 3. 🆕 TEACHER: RE-SEND ONE QUEUED SUBMISSION FOR AI EVALUATION
 // 3. TEACHER: RE-SEND ONE SUBMISSION FOR AI EVALUATION (HANDLES BOTH QUEUED TEXT-ONLY & MANUAL UPLOAD EVALUATION)
 export const reevaluateSubmission = async (req, res) => {
   try {
-    const submission = await Submission.findById(req.params.id);
+    const submission = await Submission.findById(req.params.id).populate(
+      "studentId",
+      "name email",
+    );
     if (!submission) {
       return res.status(404).json({ message: "Submission not found." });
     }
@@ -496,12 +498,26 @@ export const reevaluateSubmission = async (req, res) => {
         });
       } catch (evalErr) {
         console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
+
+        // 🟢 SANITIZATION: Prevent raw technical errors or 429/503 JSON blobs from being saved
+        let friendlyMessage =
+          "Submission received successfully! Your work is securely queued for instructor review.";
+        if (
+          evalErr.message.includes("Fraud Detected") ||
+          evalErr.isValidation
+        ) {
+          friendlyMessage = `🚨 ${evalErr.message}`;
+        }
+
         aiResult = {
-          isScreenCapture: false,
-          isSyntheticHandwriting: false,
+          isScreenCapture: evalErr.fraudType === "screen_capture",
+          isSyntheticHandwriting:
+            evalErr.fraudType === "synthetic_handwriting" ||
+            evalErr.message.includes("Synthetic Handwriting"),
           scores: {},
           totalScoreGivenByAI: 0,
-          feedback: `Automated evaluation error: ${evalErr.message}`,
+          feedback: friendlyMessage, // Clean message instead of raw JSON
+          transcribedText: "",
         };
       }
 
@@ -891,7 +907,10 @@ export const reevaluateQueuedUploads = async (req, res) => {
 // 🆕 TEACHER: RE-EVALUATE A SINGLE UPLOAD SUBMISSION
 export const reevaluateSingleUpload = async (req, res) => {
   try {
-    const submission = await Submission.findById(req.params.id);
+    const submission = await Submission.findById(req.params.id).populate(
+      "studentId",
+      "name",
+    );
     if (!submission) {
       return res.status(404).json({ message: "Submission not found." });
     }
@@ -1021,12 +1040,22 @@ export const reevaluateSingleUpload = async (req, res) => {
       });
     } catch (evalErr) {
       console.warn("⚠️ AI Upload Evaluation Exception:", evalErr.message);
+
+      // 🟢 2. SANITIZE TECHNICAL / QUOTA ERRORS vs. FRAUD FLAGS
+      let friendlyFeedback =
+        "Submission received successfully! Your work is securely queued for instructor review.";
+      if (evalErr.message.includes("Fraud Detected") || evalErr.isValidation) {
+        friendlyFeedback = `🚨 ${evalErr.message}`;
+      }
+
       aiResult = {
-        isScreenCapture: false,
-        isSyntheticHandwriting: false,
+        isScreenCapture: evalErr.fraudType === "screen_capture",
+        isSyntheticHandwriting:
+          evalErr.fraudType === "synthetic_handwriting" ||
+          evalErr.message.includes("Synthetic Handwriting"),
         scores: {},
         totalScoreGivenByAI: 0,
-        feedback: `Automated evaluation error: ${evalErr.message}`,
+        feedback: friendlyFeedback, // Clean message instead of raw JSON
         transcribedText: "",
       };
     }

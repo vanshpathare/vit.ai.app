@@ -11,12 +11,12 @@ const runCleanup = async () => {
 
     // 1. Find all assignments matching the code
     const matchingAssignments = await Assignment.find({
-      assignmentCode: "UP-B60752",
+      assignmentCode: "UP-FCE4D4",
     }).select("_id");
     const assignmentIds = matchingAssignments.map((a) => a._id);
 
     if (assignmentIds.length === 0) {
-      console.log("⚠️ No assignments found with code UP-B60752.");
+      console.log("⚠️ No assignments found with code UP-FCE4D4.");
       process.exit(0);
     }
 
